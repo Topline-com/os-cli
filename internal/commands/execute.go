@@ -232,7 +232,7 @@ func printHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  topline --agent pipeline audit --pipeline-id PIPE --since 2026-05-11")
 	_, _ = fmt.Fprintln(w, "  topline raw request GET /contacts/ --query '{\"limit\":1}'")
 	_, _ = fmt.Fprintln(w, "\nAgent-native commands:")
-	_, _ = fmt.Fprintln(w, "  pipeline audit")
+	_, _ = fmt.Fprintln(w, "  pipeline audit --pipeline-id PIPE --since YYYY-MM-DD [--concurrency 8] [--skip-activity]")
 	_, _ = fmt.Fprintln(w, "  sync init --db topline.db")
 	_, _ = fmt.Fprintln(w, "\nParity commands:")
 	for _, cmd := range commands {
