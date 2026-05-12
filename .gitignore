@@ -1,0 +1,9 @@
+/topline
+/topline.db
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store
+.env
+.env.*
+!.env.example
