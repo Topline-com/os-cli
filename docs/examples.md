@@ -25,6 +25,11 @@ Use `--skip-activity` for a fast snapshot-only count/value/stage breakdown.
 ```bash
 export TOPLINE_QUERY_TOKEN="signed_connection_token_from_/connect"
 
+# Confirm SQL is reachable before fanning out REST calls. doctor reports
+# token presence, raw-PIT rejection, schema reachability, and which expected
+# warehouse tables are synced.
+topline --agent query doctor
+
 topline --agent query schema
 
 topline --agent query explain --tables opportunities,pipeline_stages,messages
