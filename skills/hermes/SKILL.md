@@ -1,7 +1,7 @@
 ---
 name: topline-os-cli
 description: Use the Topline OS CLI for SQL-first CRM analytics, pipeline audits, token-efficient reads, deal briefs, and agent-safe sales operations. Default to the hosted warehouse `topline --agent query` path for analytics; use REST-backed commands for live drilldowns and approved writes.
-version: 1.2.0
+version: 1.3.0
 ---
 
 # Topline OS CLI
@@ -24,37 +24,42 @@ Never print full PIT or query token values. Mask secrets and unnecessary PII by 
 ```bash
 topline setup-check
 topline help
+topline --agent query doctor      # deterministic SQL readiness probe (added in v1.3.0)
 date '+%Y-%m-%d %H:%M:%S %Z (%z); %A; ISO week %V'
 ```
+
+`query doctor` returns JSON with `queryTokenPresent`, `tokenSourceEnvVar`, `rawPitRejected`, `baseUrl`, `schemaReachable`, `tableCount`, `expectedTables`, `missingTables`, and a `recommendation`. It never prints the token. Use it as the first deterministic check before any analytics SQL.
 
 ## Standard pipeline audit contract (hard limit — 4 calls)
 
 For any "what happened in pipeline X over window W" question, run **exactly** this sequence and stop:
 
-1. `date` — only if the window is custom/relative and not already known.
-2. `topline --agent query sql --sql '<freshness check>'` — ONE call, returns `MAX(_synced_at)` and `MAX(date_added/updated_at)` for `messages`, `opportunities`, `call_events`, `appointments` scoped to the pipeline's contacts.
-3. `topline --agent query sql --sql '<composite audit>'` — ONE call, returns: open count/value, stage rollup, activity by channel/direction, moved/created/closed deals in window, top active deals.
-4. Answer.
+1. `topline --agent query doctor` — ONE deterministic readiness probe. If `queryTokenPresent` is false or `schemaReachable` is false, stop and report the readiness gap. If `missingTables` is non-empty, treat each missing table as an `os-mcp` coverage bug and surface it in the final answer.
+2. `topline --agent query sql --sql '<composite audit>'` — ONE call, returns: open count/value, stage rollup, activity by channel/direction, moved/created/closed deals in window, top active deals. If the window is custom/relative and not already known, prepend a single `date` call before this step.
+3. Answer.
 
-**Hard ceiling: 4 tool calls after skills load.** No `pipeline audit`, no `opportunities search`, no `conversations search`, no per-conversation message fetches, no Python verification loops.
+**Hard ceiling: 4 tool calls after skills load** (skills load + doctor + composite SQL + optional `date` + answer). No `pipeline audit`, no `opportunities search`, no `conversations search`, no per-conversation message fetches, no Python verification loops.
+
+`query doctor` replaces the prior ad-hoc freshness/token probe — it is faster, deterministic, never prints the token, and surfaces both auth/readiness and warehouse coverage in one JSON payload. Only run a separate freshness SQL (`MAX(_synced_at)` per table) if the user explicitly asks about sync lag.
 
 Exceptions — each requires the user explicitly asking:
 
 - "Drill into deal X" → `opportunities` / `conversations` / `messages` calls OK.
 - "Why does SQL disagree with the audit?" → run `pipeline audit` and reconcile.
-- "Is the warehouse stale?" → freshness deep-dive.
+- "Is the warehouse stale?" → freshness deep-dive (`MAX(_synced_at)` per table).
 
-If the freshness check shows lag > 30 min on any required table, disclose it in the answer (e.g. "warehouse messages lag ~45 min") but do **not** auto-fallback to REST. The user can ask for a live re-run if the lag matters.
-
-If SQL is fresh but a warehouse view does not yet cover a required activity class (e.g. calls, appointments, when a UNION is missing), state that as an `os-mcp` coverage gap in the answer and stop. Coverage gaps are bugs to fix in `os-mcp`, not workarounds for the agent.
+If `query doctor`'s `recommendation` flags stale data or coverage gaps, disclose it in the answer (e.g. "os-mcp missing `appointments` table; calls/appointments may be undercounted") but do **not** auto-fallback to REST. The user can ask for a live re-run if the gap matters. Coverage gaps are bugs to fix in `os-mcp`, not workarounds for the agent.
 
 ## Hosted warehouse SQL (preferred for analytics)
 
 ```bash
-topline --agent query schema
+topline --agent query doctor
+topline --agent query schema     # only when doctor flags schema not cached or stale
 topline --agent query explain --tables opportunities,pipeline_stages,messages,contacts,call_events,appointments
 topline --agent query sql --sql 'SELECT status, COUNT(*) AS n FROM opportunities GROUP BY status ORDER BY n DESC'
 ```
+
+If `doctor` reports `queryTokenPresent: false` or `schemaReachable: false`, stop and ask the user to mint/configure a connection-bound query token. Do not silently fall back to REST and present it as the SQL-first result.
 
 Qualified-pipeline weekly activity sample:
 
