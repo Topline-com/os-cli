@@ -37,14 +37,14 @@ topline --agent pipeline audit \
 `pipeline audit` performs the expensive join inside the CLI:
 
 1. Pipeline/stage lookup.
-2. Open opportunity search.
+2. Paginated open opportunity search across every page for the selected pipeline/status.
 3. Recent conversation scan intersected with open pipeline contacts.
 4. Recent message fetch for active conversations.
 5. Overdue task fetch for active contacts.
 
 If the recent conversation scan is not deep enough to cover the requested window, the CLI falls back to per-contact conversation lookups. Message/task reads are parallelized, so agents should not hand-roll sequential loops unless the command is missing a field they need.
 
-The JSON must include `activityJoinIncluded: true` before you trust zero activity. It also includes `activityJoinStats` and `activeDeals` with opportunity name, stage, value, message count, human/workflow counts, and per-deal activity counts. Use those summaries directly before making any follow-up lookup.
+The JSON must include `activityJoinIncluded: true` before you trust zero activity. `openDeals`, `openValue`, and `stageBreakdown` are built from all opportunity pages, not just the first 100. It also includes `activityJoinStats` and `activeDeals` with opportunity name, stage, value, message count, human/workflow counts, and per-deal activity counts. Use those summaries directly before making any follow-up lookup.
 
 If `activityJoinIncluded` is missing or false, the installed CLI is old or the audit was run with `--skip-activity`; treat the output as snapshot-only and run a fallback conversation/message join before saying there was no activity.
 

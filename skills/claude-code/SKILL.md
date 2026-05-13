@@ -13,7 +13,7 @@ topline --agent pipeline audit \
   --status open
 ```
 
-The audit command resolves stages, pulls open opportunities, scans recent conversations, then joins messages/tasks in parallel. If the recent scan is not deep enough for the window, it falls back to per-contact conversation lookups. Prefer this path before raw endpoint calls.
+The audit command resolves stages, paginates all open opportunities for the selected pipeline/status, scans recent conversations, then joins messages/tasks in parallel. If the recent scan is not deep enough for the window, it falls back to per-contact conversation lookups. Prefer this path before raw endpoint calls.
 
 Before trusting a zero-activity result, confirm the returned JSON includes `activityJoinIncluded: true`. If that field is missing or false, the installed CLI is old or the audit was run with `--skip-activity`; treat the output as snapshot-only and run a fallback conversation/message join.
 

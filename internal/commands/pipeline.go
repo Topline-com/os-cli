@@ -71,27 +71,13 @@ func runPipelineAudit(args []string, stdout io.Writer, globals globalOptions) er
 	if status == "" {
 		status = "open"
 	}
-	limit := flags["limit"]
-	if limit == "" {
-		limit = "100"
+	pageLimit := parsePositiveInt(flags["limit"], 100)
+	if pageLimit > 100 {
+		pageLimit = 100
 	}
-	query := map[string]string{"location_id": cfg.LocationID, "pipeline_id": pipelineID, "status": status, "limit": limit}
-	var oppResp any
-	if err := client.Do(context.Background(), topline.Request{Method: "GET", Path: "/opportunities/search", Query: query}, &oppResp); err != nil {
+	opps, err := fetchPipelineOpportunities(context.Background(), client, cfg.LocationID, pipelineID, status, pageLimit, stageNames)
+	if err != nil {
 		return err
-	}
-	opps := make([]reports.Opportunity, 0)
-	for _, item := range extractList(oppResp, "opportunities") {
-		stageID := firstString(item, "pipelineStageId", "pipeline_stage_id", "stageId")
-		opps = append(opps, reports.Opportunity{
-			ID:            firstString(item, "id", "opportunityId"),
-			ContactID:     firstString(item, "contactId", "contact_id"),
-			Name:          firstString(item, "name", "title"),
-			StageID:       stageID,
-			StageName:     firstNonEmpty(stageNames[stageID], firstString(item, "stageName", "pipelineStageName")),
-			Status:        firstNonEmpty(firstString(item, "status"), "open"),
-			MonetaryValue: numAny(firstAny(item, "monetaryValue", "monetary_value", "value")),
-		})
 	}
 	messages := []reports.MessageEvent(nil)
 	tasks := []reports.Task(nil)
@@ -182,6 +168,97 @@ type recentConversationResult struct {
 	Complete      bool
 	Scanned       int
 	LookupError   *reports.LookupError
+}
+
+func fetchPipelineOpportunities(ctx context.Context, client *topline.Client, locationID, pipelineID, status string, pageLimit int, stageNames map[string]string) ([]reports.Opportunity, error) {
+	query := map[string]string{"location_id": locationID, "pipeline_id": pipelineID, "status": status, "limit": fmt.Sprint(pageLimit)}
+	opps := make([]reports.Opportunity, 0)
+	seenIDs := map[string]bool{}
+	for page := 0; page < 1000; page++ {
+		var resp any
+		if err := client.Do(ctx, topline.Request{Method: "GET", Path: "/opportunities/search", Query: query}, &resp); err != nil {
+			return nil, err
+		}
+		for _, item := range extractList(resp, "opportunities") {
+			opp := opportunityFromMap(item, stageNames)
+			if opp.ID != "" {
+				if seenIDs[opp.ID] {
+					continue
+				}
+				seenIDs[opp.ID] = true
+			}
+			opps = append(opps, opp)
+		}
+		meta, ok := responseMeta(resp)
+		if !ok || !hasNextPage(meta) {
+			return opps, nil
+		}
+		startAfter := cursorString(firstAny(meta, "startAfter", "start_after"))
+		startAfterID := firstString(meta, "startAfterId", "start_after_id")
+		if startAfter == "" || startAfterID == "" {
+			return opps, nil
+		}
+		query["startAfter"] = startAfter
+		query["startAfterId"] = startAfterID
+	}
+	return nil, fmt.Errorf("opportunities pagination exceeded 1000 pages for pipeline %s", pipelineID)
+}
+
+func opportunityFromMap(item map[string]any, stageNames map[string]string) reports.Opportunity {
+	stageID := firstString(item, "pipelineStageId", "pipeline_stage_id", "stageId")
+	return reports.Opportunity{
+		ID:            firstString(item, "id", "opportunityId"),
+		ContactID:     firstString(item, "contactId", "contact_id"),
+		Name:          firstString(item, "name", "title"),
+		StageID:       stageID,
+		StageName:     firstNonEmpty(stageNames[stageID], firstString(item, "stageName", "pipelineStageName")),
+		Status:        firstNonEmpty(firstString(item, "status"), "open"),
+		MonetaryValue: numAny(firstAny(item, "monetaryValue", "monetary_value", "value")),
+	}
+}
+
+func responseMeta(resp any) (map[string]any, bool) {
+	m, ok := resp.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	meta, ok := m["meta"].(map[string]any)
+	return meta, ok
+}
+
+func hasNextPage(meta map[string]any) bool {
+	for _, key := range []string{"nextPage", "nextPageUrl", "next"} {
+		value, ok := meta[key]
+		if !ok || value == nil {
+			continue
+		}
+		if strings.TrimSpace(strAny(value)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func cursorString(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		if v == float64(int64(v)) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case jsonNumber:
+		return strings.TrimSpace(fmt.Sprint(v))
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
 }
 
 func collectPipelineAuditActivity(ctx context.Context, client *topline.Client, locationID string, start, end time.Time, opps []reports.Opportunity, flags map[string]string) ([]reports.MessageEvent, []reports.Task, []reports.LookupError, *reports.ActivityJoinStats) {
