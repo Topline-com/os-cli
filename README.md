@@ -30,6 +30,22 @@ cd os-cli
 go build ./cmd/topline
 ```
 
+Hermes-aware install (recommended for any agent that loads CLI env from
+`~/.hermes/.env` or `~/.hermes/profiles/*/.env`):
+
+```bash
+git clone https://github.com/Topline-com/os-cli.git
+cd os-cli
+./scripts/install-local.sh
+```
+
+The script builds `~/.local/bin/topline-bin` and writes a wrapper at
+`~/.local/bin/topline` that loads only the `TOPLINE_*` env keys needed by REST
+and SQL commands (`TOPLINE_PIT`, `TOPLINE_LOCATION_ID`, `TOPLINE_BRAND_NAME`,
+`TOPLINE_BASE_URL`, `TOPLINE_QUERY_TOKEN`, `TOPLINE_QUERY_BASE_URL`,
+`TOPLINE_MCP_ACCESS_TOKEN`, `TOPLINE_MCP_TOKEN`). It does not print or persist
+secrets — only those env-var keys are written into the wrapper.
+
 ## Auth
 
 Set the same environment variables used by the MCP:
@@ -94,6 +110,7 @@ only need the open count/value/stage breakdown.
 Warehouse SQL/query API:
 
 ```bash
+topline --agent query doctor
 topline --agent query schema
 topline --agent query explain --tables opportunities,pipeline_stages,messages
 topline --agent query sql --sql '
@@ -103,6 +120,14 @@ topline --agent query sql --sql '
   ORDER BY n DESC
 '
 ```
+
+`query doctor` is the readiness probe agents should run before deciding SQL vs
+REST. It reports whether `TOPLINE_QUERY_TOKEN` is present, whether the token is
+a (rejected) raw PIT, whether the hosted schema endpoint is reachable, and
+whether the warehouse exposes the core analytics tables (`contacts`,
+`opportunities`, `messages`, `pipelines`, `pipeline_stages`, `call_events`,
+`appointments`, `conversations`). Missing tables are surfaced as os-mcp
+coverage bugs — not as a reason to silently fall back to REST.
 
 `query` delegates to the hosted `Topline-com/os-mcp` SQL surface
 (`/query/api/*`): schema/catalog discovery, table explanation, and safe

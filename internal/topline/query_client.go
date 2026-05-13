@@ -36,18 +36,45 @@ func (e *QueryAPIError) Error() string {
 	return fmt.Sprintf("Topline query API error %d: %s", e.StatusCode, e.Message)
 }
 
-func LoadQueryConfig() (QueryConfig, error) {
-	cfg := QueryConfig{
+// QueryEnvStatus reports what the CLI sees in the environment for the SQL/query
+// surface without erroring. Use this for `query doctor`; use LoadQueryConfig for
+// commands that must hard-fail when the token is missing or unusable.
+type QueryEnvStatus struct {
+	BaseURL      string
+	Token        string
+	TokenPresent bool
+	RawPITToken  bool
+	SourceEnvVar string
+}
+
+func InspectQueryEnv() QueryEnvStatus {
+	status := QueryEnvStatus{
 		BaseURL: strings.TrimSpace(os.Getenv("TOPLINE_QUERY_BASE_URL")),
-		Token:   firstNonEmptyEnv("TOPLINE_QUERY_TOKEN", "TOPLINE_MCP_ACCESS_TOKEN", "TOPLINE_MCP_TOKEN"),
 	}
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = DefaultQueryBaseURL
+	if status.BaseURL == "" {
+		status.BaseURL = DefaultQueryBaseURL
 	}
-	if cfg.Token == "" {
+	for _, key := range []string{"TOPLINE_QUERY_TOKEN", "TOPLINE_MCP_ACCESS_TOKEN", "TOPLINE_MCP_TOKEN"} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			status.Token = v
+			status.TokenPresent = true
+			status.SourceEnvVar = key
+			break
+		}
+	}
+	if status.TokenPresent && strings.HasPrefix(status.Token, "pit-") {
+		status.RawPITToken = true
+	}
+	return status
+}
+
+func LoadQueryConfig() (QueryConfig, error) {
+	status := InspectQueryEnv()
+	cfg := QueryConfig{BaseURL: status.BaseURL, Token: status.Token}
+	if !status.TokenPresent {
 		return cfg, errors.New("TOPLINE_QUERY_TOKEN is required for SQL/query commands; generate a connection-bound token at https://os-mcp.topline.com/connect or set TOPLINE_MCP_ACCESS_TOKEN")
 	}
-	if strings.HasPrefix(cfg.Token, "pit-") {
+	if status.RawPITToken {
 		return cfg, errors.New("TOPLINE_QUERY_TOKEN must be a connection-bound MCP/query token, not a raw PIT; generate one at https://os-mcp.topline.com/connect")
 	}
 	return cfg, nil
