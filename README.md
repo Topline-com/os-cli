@@ -46,6 +46,18 @@ Optional for tests/proxies:
 export TOPLINE_BASE_URL="https://services.leadconnectorhq.com"
 ```
 
+SQL/query commands use the hosted `os-mcp` warehouse HTTP API, not the raw
+LeadConnector REST API. That surface requires a connection-bound token minted by
+the remote MCP, because raw PITs are intentionally rejected for read-only SQL:
+
+```bash
+export TOPLINE_QUERY_TOKEN="signed_connection_token_from_/connect"
+export TOPLINE_QUERY_BASE_URL="https://os-mcp.topline.com" # optional default
+```
+
+Generate `TOPLINE_QUERY_TOKEN` at <https://os-mcp.topline.com/connect> using the
+same PIT + Location ID. Keep it out of command history and commits.
+
 ## Quick start
 
 ```bash
@@ -78,6 +90,27 @@ so agents do not need a second lookup just to name the touched deals. If
 `activityJoinIncluded` is missing or false, do not trust zero activity as a final
 answer; run a fallback conversation/message join. Use `--skip-activity` when you
 only need the open count/value/stage breakdown.
+
+Warehouse SQL/query API:
+
+```bash
+topline --agent query schema
+topline --agent query explain --tables opportunities,pipeline_stages,messages
+topline --agent query sql --sql '
+  SELECT status, COUNT(*) AS n, SUM(monetary_value) AS value
+  FROM opportunities
+  GROUP BY status
+  ORDER BY n DESC
+'
+```
+
+`query` delegates to the hosted `Topline-com/os-mcp` SQL surface
+(`/query/api/*`): schema/catalog discovery, table explanation, and safe
+`SELECT` / `WITH ... SELECT` execution. The worker enforces the same read-only
+SQL gate as MCP (`DDL`, `DML`, `PRAGMA`, `ATTACH`, multi-statement SQL, and
+hidden tables are rejected) and caps results at 5,000 rows. Use this for
+Streamlined-style analytics questions where a relational scan beats paginated
+REST fan-out.
 
 Local SQLite foundation:
 
@@ -124,6 +157,7 @@ Parity command scaffolding exists for the public MCP action surface:
 Agent-native foundations included now:
 
 - `pipeline audit` with recent conversation scan + parallel message/task joins
+- `query schema|catalog|explain|sql` against the hosted MCP warehouse HTTP API
 - `sync init`
 - `--agent`
 - `--mask-pii`

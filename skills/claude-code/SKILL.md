@@ -29,9 +29,12 @@ Useful switches:
 
 ```bash
 topline setup-check
+topline --agent query schema
+topline --agent query explain --tables opportunities,pipeline_stages,messages,contacts
+topline --agent query sql --sql 'SELECT status, COUNT(*) AS n FROM opportunities GROUP BY status ORDER BY n DESC'
 topline opportunities pipelines
 topline opportunities search --pipeline-id PIPE --status open --limit 100
 topline sync init --db topline.db
 ```
 
-Prefer `--agent` for token-efficient, PII-masked output. Never print PIT/API token values.
+Use hosted SQL query commands for broad analytics when `TOPLINE_QUERY_TOKEN` is configured and warehouse freshness is acceptable. `TOPLINE_QUERY_TOKEN` must be a connection-bound token from `https://os-mcp.topline.com/connect`, not a raw PIT. Prefer `--agent` for token-efficient, PII-masked output. Never print PIT/API/query token values.

@@ -20,6 +20,30 @@ sales question directly. If `activityJoinIncluded` is missing or false, use a
 fallback conversation/message join before reporting zero activity.
 Use `--skip-activity` for a fast snapshot-only count/value/stage breakdown.
 
+## Warehouse SQL analytics
+
+```bash
+export TOPLINE_QUERY_TOKEN="signed_connection_token_from_/connect"
+
+topline --agent query schema
+
+topline --agent query explain --tables opportunities,pipeline_stages,messages
+
+topline --agent query sql --sql '
+  SELECT p.name AS pipeline, COUNT(*) AS open_deals, SUM(o.monetary_value) AS value
+  FROM opportunities o
+  JOIN pipelines p ON p.id = o.pipeline_id
+  WHERE o.status = "open"
+  GROUP BY p.name
+  ORDER BY value DESC
+'
+```
+
+Use `query` for broad analytics and audits when SQL over the synced warehouse is
+better than paginating live REST endpoints. The hosted MCP query API enforces
+read-only SQLite: one `SELECT` / `WITH ... SELECT`, exposed tables only, 5,000-row
+cap.
+
 ## Search open opportunities
 
 ```bash

@@ -13,6 +13,7 @@ Use `topline` when the user asks for sales pipeline reporting, CRM hygiene, deal
 - `TOPLINE_PIT`
 - `TOPLINE_LOCATION_ID`
 - `TOPLINE_BRAND_NAME` optional
+- `TOPLINE_QUERY_TOKEN` optional, for hosted MCP warehouse SQL/query commands. Must be a connection-bound token from `https://os-mcp.topline.com/connect`, not a raw PIT.
 
 Never print full PIT values. Mask secrets and unnecessary PII by default in summaries.
 
@@ -60,6 +61,9 @@ Use these flags when needed:
 ## Other preferred commands
 
 ```bash
+topline --agent query schema
+topline --agent query explain --tables opportunities,pipeline_stages,messages,contacts
+topline --agent query sql --sql 'SELECT status, COUNT(*) AS n FROM opportunities GROUP BY status ORDER BY n DESC'
 topline opportunities pipelines
 topline opportunities search --pipeline-id PIPELINE_ID --status open --limit 100
 topline conversations search --contact-id CONTACT_ID --status all --limit 10
@@ -69,4 +73,4 @@ topline sync init --db topline.db
 
 ## Reporting rule of thumb
 
-Use raw MCP or `topline raw request` for one-off edge cases. Use the CLI for compound read/reporting workflows. Keep activity separate from movement: conversation activity can happen without opportunity stage/status changes.
+Use hosted SQL query commands for broad analytics when `TOPLINE_QUERY_TOKEN` is configured and warehouse freshness is acceptable. Use raw MCP or `topline raw request` for one-off edge cases. Use the CLI for compound read/reporting workflows. Keep activity separate from movement: conversation activity can happen without opportunity stage/status changes.
