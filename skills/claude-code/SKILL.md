@@ -9,16 +9,15 @@ For weekly qualified-pipeline questions, run one compound command instead of man
 ```bash
 topline --agent pipeline audit \
   --pipeline-id PIPE \
-  --since 2026-05-11 \
-  --status open \
-  --concurrency 8
+  --since this-week-et \
+  --status open
 ```
 
-The audit command resolves stages, pulls open opportunities, then joins per-contact conversations/messages/tasks in parallel. Prefer this path before raw endpoint calls.
+The audit command resolves stages, pulls open opportunities, scans recent conversations, then joins messages/tasks in parallel. If the recent scan is not deep enough for the window, it falls back to per-contact conversation lookups. Prefer this path before raw endpoint calls.
 
 Before trusting a zero-activity result, confirm the returned JSON includes `activityJoinIncluded: true`. If that field is missing or false, the installed CLI is old or the audit was run with `--skip-activity`; treat the output as snapshot-only and run a fallback conversation/message join.
 
-Use the returned `activeDeals` array first: it already includes opportunity names, stages, values, message counts, human/workflow counts, and per-deal activity counts.
+Use the returned `activityJoinStats` and `activeDeals` array first: it already includes opportunity names, stages, values, message counts, human/workflow counts, and per-deal activity counts.
 
 Useful switches:
 

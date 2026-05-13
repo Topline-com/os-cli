@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestPipelineAuditFetchesActivityConcurrently(t *testing.T) {
@@ -47,14 +48,13 @@ func TestPipelineAuditFetchesActivityConcurrently(t *testing.T) {
 			if q.Get("locationId") != "loc_123" || q.Get("status") != "all" {
 				t.Fatalf("conversation query mismatch: %s", r.URL.RawQuery)
 			}
-			switch q.Get("contactId") {
-			case "contact_marcy":
-				_, _ = w.Write([]byte(`{"conversations":[{"id":"conv_marcy","contactId":"contact_marcy","lastMessageDate":"2026-05-12T18:00:00Z"}]}`))
-			case "contact_scottessa":
-				_, _ = w.Write([]byte(`{"conversations":[{"id":"conv_scottessa","contactId":"contact_scottessa","lastMessageDate":"2026-05-01T18:00:00Z"}]}`))
-			default:
-				t.Fatalf("unexpected contact conversation lookup: %q", q.Get("contactId"))
+			if q.Get("contactId") != "" {
+				t.Fatalf("expected recent conversation scan, got per-contact lookup: %s", r.URL.RawQuery)
 			}
+			_, _ = w.Write([]byte(`{"conversations":[
+				{"id":"conv_marcy","contactId":"contact_marcy","lastMessageDate":"2026-05-12T18:00:00Z"},
+				{"id":"conv_scottessa","contactId":"contact_scottessa","lastMessageDate":"2026-05-01T18:00:00Z"}
+			]}`))
 		case "/conversations/conv_marcy/messages":
 			_, _ = w.Write([]byte(`{
 				"messages":{"messages":[
@@ -99,6 +99,14 @@ func TestPipelineAuditFetchesActivityConcurrently(t *testing.T) {
 			MessageCount   int            `json:"messageCount"`
 			ActivityCounts map[string]int `json:"activityCounts"`
 		} `json:"activeDeals"`
+		ActivityJoinStats struct {
+			Mode                 string `json:"mode"`
+			ConversationSearches int    `json:"conversationSearches"`
+			ConversationsScanned int    `json:"conversationsScanned"`
+			ActiveConversations  int    `json:"activeConversations"`
+			MessageLookups       int    `json:"messageLookups"`
+			TaskLookups          int    `json:"taskLookups"`
+		} `json:"activityJoinStats"`
 		HygieneFlags []struct {
 			ContactID string `json:"contactId"`
 			Title     string `json:"title"`
@@ -135,13 +143,32 @@ func TestPipelineAuditFetchesActivityConcurrently(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if seen["/conversations/search"] != 2 {
-		t.Fatalf("expected one conversation lookup per open contact, saw %#v", seen)
+	if seen["/conversations/search"] != 1 {
+		t.Fatalf("expected one recent conversation scan instead of N contact lookups, saw %#v", seen)
+	}
+	if out.ActivityJoinStats.Mode != "recent-scan" || out.ActivityJoinStats.ConversationSearches != 1 || out.ActivityJoinStats.ConversationsScanned != 2 || out.ActivityJoinStats.ActiveConversations != 1 || out.ActivityJoinStats.MessageLookups != 1 || out.ActivityJoinStats.TaskLookups != 1 {
+		t.Fatalf("activity join stats did not describe the fast path: %#v", out.ActivityJoinStats)
 	}
 	if seen["/conversations/conv_marcy/messages"] != 1 {
 		t.Fatalf("expected message lookup for active conversation, saw %#v", seen)
 	}
 	if seen["/contacts/contact_marcy/tasks"] != 1 {
 		t.Fatalf("expected task lookup for active deal contact, saw %#v", seen)
+	}
+}
+
+func TestParseAuditTimeThisWeekET(t *testing.T) {
+	now := time.Date(2026, 5, 12, 20, 30, 0, 0, time.UTC)
+	got, err := parseAuditTimeWithNow("this-week-et", time.Time{}, now)
+	if err != nil {
+		t.Fatalf("parseAuditTimeWithNow returned error: %v", err)
+	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 5, 11, 0, 0, 0, 0, loc)
+	if !got.Equal(want) || got.Location().String() != loc.String() {
+		t.Fatalf("this-week-et = %s (%s), want %s (%s)", got, got.Location(), want, want.Location())
 	}
 }

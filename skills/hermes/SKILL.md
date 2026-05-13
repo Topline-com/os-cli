@@ -30,22 +30,21 @@ For “what happened this week in our qualified pipeline?” use the compound au
 ```bash
 topline --agent pipeline audit \
   --pipeline-id PIPELINE_ID \
-  --since YYYY-MM-DD \
-  --status open \
-  --concurrency 8
+  --since this-week-et \
+  --status open
 ```
 
 `pipeline audit` performs the expensive join inside the CLI:
 
 1. Pipeline/stage lookup.
 2. Open opportunity search.
-3. Per-contact conversation search.
+3. Recent conversation scan intersected with open pipeline contacts.
 4. Recent message fetch for active conversations.
-5. Overdue task lookup for contacts with this-window activity.
+5. Overdue task fetch for active contacts.
 
-The contact/message/task reads are parallelized, so agents should not hand-roll sequential loops unless the command is missing a field they need.
+If the recent conversation scan is not deep enough to cover the requested window, the CLI falls back to per-contact conversation lookups. Message/task reads are parallelized, so agents should not hand-roll sequential loops unless the command is missing a field they need.
 
-The JSON must include `activityJoinIncluded: true` before you trust zero activity. It also includes `activeDeals` with opportunity name, stage, value, message count, human/workflow counts, and per-deal activity counts. Use those summaries directly before making any follow-up lookup.
+The JSON must include `activityJoinIncluded: true` before you trust zero activity. It also includes `activityJoinStats` and `activeDeals` with opportunity name, stage, value, message count, human/workflow counts, and per-deal activity counts. Use those summaries directly before making any follow-up lookup.
 
 If `activityJoinIncluded` is missing or false, the installed CLI is old or the audit was run with `--skip-activity`; treat the output as snapshot-only and run a fallback conversation/message join before saying there was no activity.
 
@@ -53,6 +52,7 @@ Use these flags when needed:
 
 - `--skip-activity` — snapshot only: open count, value, stage breakdown.
 - `--concurrency 8` — default parallelism; raise carefully, max effective cap is 16.
+- `--recent-conversation-limit 100` — default global recent conversation scan depth; max API-safe value is 100.
 - `--conversation-limit 10` — conversations fetched per opportunity contact.
 - `--message-limit 30` — messages fetched per active conversation.
 - `--include-tasks false` — skip overdue task hygiene lookup.

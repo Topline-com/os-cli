@@ -38,6 +38,7 @@ type PipelineAuditInput struct {
 	Messages             []MessageEvent `json:"messages"`
 	Tasks                []Task         `json:"tasks"`
 	ActivityJoinIncluded bool           `json:"activityJoinIncluded"`
+	ActivityJoinStats    *ActivityJoinStats
 }
 
 type StageSummary struct {
@@ -58,6 +59,16 @@ type LookupError struct {
 	ContactID      string `json:"contactId,omitempty"`
 	ConversationID string `json:"conversationId,omitempty"`
 	Error          string `json:"error"`
+}
+
+type ActivityJoinStats struct {
+	Mode                 string `json:"mode"`
+	OpenContacts         int    `json:"openContacts"`
+	ConversationSearches int    `json:"conversationSearches"`
+	ConversationsScanned int    `json:"conversationsScanned"`
+	ActiveConversations  int    `json:"activeConversations"`
+	MessageLookups       int    `json:"messageLookups"`
+	TaskLookups          int    `json:"taskLookups"`
 }
 
 type ActiveDealSummary struct {
@@ -85,6 +96,7 @@ type PipelineAudit struct {
 	HygieneFlags          []HygieneFlag       `json:"hygieneFlags"`
 	ActiveOpportunityIDs  []string            `json:"activeOpportunityIds"`
 	ActiveDeals           []ActiveDealSummary `json:"activeDeals"`
+	ActivityJoinStats     *ActivityJoinStats  `json:"activityJoinStats,omitempty"`
 	LookupErrors          []LookupError       `json:"lookupErrors,omitempty"`
 	OpenContacts          map[string]string   `json:"-"`
 }
@@ -95,6 +107,7 @@ func BuildPipelineAudit(in PipelineAuditInput) PipelineAudit {
 		WindowStart:          in.Start,
 		WindowEnd:            in.End,
 		ActivityJoinIncluded: in.ActivityJoinIncluded,
+		ActivityJoinStats:    in.ActivityJoinStats,
 		ActivityCounts:       map[string]int{"Email": 0, "SMS": 0, "Call": 0},
 		StageBreakdown:       []StageSummary{},
 		HygieneFlags:         []HygieneFlag{},

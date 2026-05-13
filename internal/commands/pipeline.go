@@ -96,26 +96,46 @@ func runPipelineAudit(args []string, stdout io.Writer, globals globalOptions) er
 	messages := []reports.MessageEvent(nil)
 	tasks := []reports.Task(nil)
 	lookupErrors := []reports.LookupError(nil)
+	var activityStats *reports.ActivityJoinStats
 	activityJoinIncluded := includePipelineActivity(flags)
 	if activityJoinIncluded {
-		messages, tasks, lookupErrors = collectPipelineAuditActivity(context.Background(), client, cfg.LocationID, start, end, opps, flags)
+		messages, tasks, lookupErrors, activityStats = collectPipelineAuditActivity(context.Background(), client, cfg.LocationID, start, end, opps, flags)
 	}
-	audit := reports.BuildPipelineAudit(reports.PipelineAuditInput{PipelineName: pipelineName, Start: start, End: end, Opportunities: opps, Messages: messages, Tasks: tasks, ActivityJoinIncluded: activityJoinIncluded})
+	audit := reports.BuildPipelineAudit(reports.PipelineAuditInput{PipelineName: pipelineName, Start: start, End: end, Opportunities: opps, Messages: messages, Tasks: tasks, ActivityJoinIncluded: activityJoinIncluded, ActivityJoinStats: activityStats})
 	audit.LookupErrors = lookupErrors
 	return output.WriteJSON(stdout, audit, globals.MaskPII)
 }
 
 func parseAuditTime(value string, fallback time.Time) (time.Time, error) {
-	if value == "" {
+	return parseAuditTimeWithNow(value, fallback, time.Now())
+}
+
+func parseAuditTimeWithNow(value string, fallback time.Time, now time.Time) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
 		return fallback, nil
 	}
-	if t, err := time.Parse(time.RFC3339, value); err == nil {
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "now":
+		return now, nil
+	case "this-week", "this-week-et", "week", "week-et":
+		loc, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			return time.Time{}, err
+		}
+		n := now.In(loc)
+		daysSinceMonday := (int(n.Weekday()) + 6) % 7
+		weekStart := time.Date(n.Year(), n.Month(), n.Day()-daysSinceMonday, 0, 0, 0, 0, loc)
+		return weekStart, nil
+	}
+	if t, err := time.Parse(time.RFC3339, trimmed); err == nil {
 		return t, nil
 	}
-	if t, err := time.Parse("2006-01-02", value); err == nil {
+	if t, err := time.Parse("2006-01-02", trimmed); err == nil {
 		return t, nil
 	}
-	return time.Time{}, fmt.Errorf("invalid time %q; use YYYY-MM-DD or RFC3339", value)
+	return time.Time{}, fmt.Errorf("invalid time %q; use YYYY-MM-DD, RFC3339, now, or this-week-et", value)
 }
 
 func includePipelineActivity(flags map[string]string) bool {
@@ -157,28 +177,70 @@ type taskLookupResult struct {
 	LookupError *reports.LookupError
 }
 
-func collectPipelineAuditActivity(ctx context.Context, client *topline.Client, locationID string, start, end time.Time, opps []reports.Opportunity, flags map[string]string) ([]reports.MessageEvent, []reports.Task, []reports.LookupError) {
+type recentConversationResult struct {
+	Conversations []map[string]any
+	Complete      bool
+	Scanned       int
+	LookupError   *reports.LookupError
+}
+
+func collectPipelineAuditActivity(ctx context.Context, client *topline.Client, locationID string, start, end time.Time, opps []reports.Opportunity, flags map[string]string) ([]reports.MessageEvent, []reports.Task, []reports.LookupError, *reports.ActivityJoinStats) {
 	concurrency := parsePositiveInt(flags["concurrency"], 8)
 	if concurrency > 16 {
 		concurrency = 16
 	}
 	conversationLimit := parsePositiveInt(firstNonEmpty(flags["conversationLimit"], flags["conversationLimitPerContact"]), 10)
+	recentConversationLimit := parsePositiveInt(flags["recentConversationLimit"], 100)
+	if recentConversationLimit > 100 {
+		recentConversationLimit = 100
+	}
 	messageLimit := parsePositiveInt(flags["messageLimit"], 30)
 	includeTasks := !flagIsFalse(flags["includeTasks"]) && !flagIsFalse(flags["tasks"]) && flags["skipTasks"] != "true"
 
 	contactIDs := uniqueOpportunityContacts(opps)
-	conversations, lookupErrors := fetchPipelineConversations(ctx, client, locationID, contactIDs, conversationLimit, concurrency)
+	stats := &reports.ActivityJoinStats{OpenContacts: len(contactIDs)}
+	contactSet := contactIDSet(contactIDs)
+	lookupErrors := []reports.LookupError{}
+	conversations := []map[string]any{}
+	if !flagIsFalse(flags["recentConversationScan"]) && flags["skipRecentConversationScan"] != "true" {
+		recent := fetchRecentPipelineConversations(ctx, client, locationID, contactSet, start, recentConversationLimit)
+		stats.ConversationSearches++
+		stats.ConversationsScanned += recent.Scanned
+		if recent.LookupError == nil && recent.Complete {
+			stats.Mode = "recent-scan"
+			conversations = recent.Conversations
+		} else {
+			if recent.LookupError != nil {
+				lookupErrors = append(lookupErrors, *recent.LookupError)
+			}
+			stats.Mode = "per-contact-fallback"
+			var contactErrors []reports.LookupError
+			conversations, contactErrors = fetchPipelineConversations(ctx, client, locationID, contactIDs, conversationLimit, concurrency)
+			lookupErrors = append(lookupErrors, contactErrors...)
+			stats.ConversationSearches += len(contactIDs)
+			stats.ConversationsScanned += len(conversations)
+		}
+	} else {
+		stats.Mode = "per-contact"
+		var contactErrors []reports.LookupError
+		conversations, contactErrors = fetchPipelineConversations(ctx, client, locationID, contactIDs, conversationLimit, concurrency)
+		lookupErrors = append(lookupErrors, contactErrors...)
+		stats.ConversationSearches += len(contactIDs)
+		stats.ConversationsScanned += len(conversations)
+	}
 
 	activeConversations := make([]map[string]any, 0, len(conversations))
 	for _, conv := range conversations {
-		lastActivity := firstCRMTime(conv, "lastMessageDate", "lastManualMessageDate", "dateUpdated", "updatedAt")
+		lastActivity := conversationLastActivity(conv)
 		if lastActivity.IsZero() || !lastActivity.Before(start) {
 			activeConversations = append(activeConversations, conv)
 		}
 	}
+	stats.ActiveConversations = len(activeConversations)
 
 	messageMaps, messageErrors := fetchPipelineMessages(ctx, client, activeConversations, messageLimit, concurrency)
 	lookupErrors = append(lookupErrors, messageErrors...)
+	stats.MessageLookups = len(activeConversations)
 
 	messages := make([]reports.MessageEvent, 0, len(messageMaps))
 	activeContacts := map[string]bool{}
@@ -207,6 +269,7 @@ func collectPipelineAuditActivity(ctx context.Context, client *topline.Client, l
 		for contactID := range activeContacts {
 			activeContactIDs = append(activeContactIDs, contactID)
 		}
+		stats.TaskLookups = len(activeContactIDs)
 		taskMaps, taskErrors := fetchPipelineTasks(ctx, client, activeContactIDs, concurrency)
 		lookupErrors = append(lookupErrors, taskErrors...)
 		for _, item := range taskMaps {
@@ -220,7 +283,7 @@ func collectPipelineAuditActivity(ctx context.Context, client *topline.Client, l
 		}
 	}
 
-	return messages, tasks, lookupErrors
+	return messages, tasks, lookupErrors, stats
 }
 
 func uniqueOpportunityContacts(opps []reports.Opportunity) []string {
@@ -235,6 +298,56 @@ func uniqueOpportunityContacts(opps []reports.Opportunity) []string {
 		out = append(out, contactID)
 	}
 	return out
+}
+
+func contactIDSet(contactIDs []string) map[string]bool {
+	out := make(map[string]bool, len(contactIDs))
+	for _, contactID := range contactIDs {
+		trimmed := strings.TrimSpace(contactID)
+		if trimmed != "" {
+			out[trimmed] = true
+		}
+	}
+	return out
+}
+
+func fetchRecentPipelineConversations(ctx context.Context, client *topline.Client, locationID string, contactIDs map[string]bool, start time.Time, limit int) recentConversationResult {
+	var resp any
+	err := client.Do(ctx, topline.Request{Method: "GET", Path: "/conversations/search", Query: map[string]string{"locationId": locationID, "status": "all", "limit": fmt.Sprint(limit)}}, &resp)
+	if err != nil {
+		return recentConversationResult{LookupError: &reports.LookupError{Kind: "recent_conversations", Error: err.Error()}}
+	}
+	all := extractList(resp, "conversations")
+	matched := make([]map[string]any, 0)
+	earliest := time.Time{}
+	seenConversations := map[string]bool{}
+	for _, conv := range all {
+		lastActivity := conversationLastActivity(conv)
+		if !lastActivity.IsZero() && (earliest.IsZero() || lastActivity.Before(earliest)) {
+			earliest = lastActivity
+		}
+		contactID := firstString(conv, "contactId", "contact_id")
+		if !contactIDs[contactID] {
+			continue
+		}
+		if !lastActivity.IsZero() && lastActivity.Before(start) {
+			continue
+		}
+		conversationID := firstString(conv, "id", "conversationId")
+		if conversationID != "" && seenConversations[conversationID] {
+			continue
+		}
+		if conversationID != "" {
+			seenConversations[conversationID] = true
+		}
+		matched = append(matched, conv)
+	}
+	complete := len(all) < limit || (!earliest.IsZero() && earliest.Before(start))
+	return recentConversationResult{Conversations: matched, Complete: complete, Scanned: len(all)}
+}
+
+func conversationLastActivity(conv map[string]any) time.Time {
+	return firstCRMTime(conv, "lastMessageDate", "lastManualMessageDate", "dateUpdated", "updatedAt")
 }
 
 func fetchPipelineConversations(ctx context.Context, client *topline.Client, locationID string, contactIDs []string, limit int, concurrency int) ([]map[string]any, []reports.LookupError) {

@@ -5,14 +5,15 @@
 ```bash
 topline --agent pipeline audit \
   --pipeline-id CLUy1QapsrEeBiNrmQiL \
-  --since 2026-05-11 \
-  --status open \
-  --concurrency 8
+  --since this-week-et \
+  --status open
 ```
 
 This single command resolves the pipeline/stage map, pulls open opportunities,
-and joins contact conversations, recent messages, and overdue tasks in parallel.
-The response includes `activityJoinIncluded: true` and `activeDeals` with deal
+scans recent conversations, then joins recent messages and overdue tasks in
+parallel. If the recent conversation scan is not deep enough to cover the window,
+the CLI falls back to per-contact conversation lookups. The response includes
+`activityJoinIncluded: true`, `activityJoinStats`, and `activeDeals` with deal
 names, stages, values, and per-deal activity counts so an agent can answer the
 sales question directly. If `activityJoinIncluded` is missing or false, use a
 fallback conversation/message join before reporting zero activity.
