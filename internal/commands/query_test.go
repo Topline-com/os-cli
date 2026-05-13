@@ -241,3 +241,135 @@ func TestQueryDoctorFlagsMissingTables(t *testing.T) {
 		t.Fatalf("recommendation should call out coverage gap; got %q", rec)
 	}
 }
+
+func TestQueryFreshnessHitsExecuteSQLEndpoint(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+
+	var gotSQL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/query/api/execute-sql" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		var body struct {
+			SQL string `json:"sql"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		gotSQL = body.SQL
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"columns":["table_name","row_count","last_synced_at","lag_seconds"],"rows":[]}`))
+	}))
+	defer server.Close()
+	t.Setenv("TOPLINE_QUERY_BASE_URL", server.URL)
+
+	var stdout bytes.Buffer
+	if err := Execute([]string{"query", "freshness"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !strings.Contains(gotSQL, "FROM warehouse_freshness") {
+		t.Fatalf("freshness SQL did not reference warehouse_freshness view; got %q", gotSQL)
+	}
+}
+
+func TestQuerySnapshotRequiresPipeline(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+	t.Setenv("TOPLINE_QUERY_BASE_URL", "http://127.0.0.1:1")
+
+	var stdout bytes.Buffer
+	err := Execute([]string{"query", "snapshot"}, &stdout, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--pipeline") {
+		t.Fatalf("expected --pipeline usage error, got %v", err)
+	}
+}
+
+func TestQuerySnapshotQueriesPipelineSnapshotView(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+
+	var gotSQL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			SQL string `json:"sql"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotSQL = body.SQL
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"columns":[],"rows":[]}`))
+	}))
+	defer server.Close()
+	t.Setenv("TOPLINE_QUERY_BASE_URL", server.URL)
+
+	var stdout bytes.Buffer
+	if err := Execute([]string{"query", "snapshot", "--pipeline", "CLUy1QapsrEeBiNrmQiL"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if !strings.Contains(gotSQL, "FROM pipeline_snapshot") {
+		t.Fatalf("snapshot SQL missing pipeline_snapshot view; got %q", gotSQL)
+	}
+	if !strings.Contains(gotSQL, "'CLUy1QapsrEeBiNrmQiL'") {
+		t.Fatalf("snapshot SQL did not bind pipeline id; got %q", gotSQL)
+	}
+}
+
+func TestQueryAuditCallsCompositeViewsInOneInvocation(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+
+	var sqls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/query/api/execute-sql" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		var body struct {
+			SQL string `json:"sql"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sqls = append(sqls, body.SQL)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"columns":[],"rows":[]}`))
+	}))
+	defer server.Close()
+	t.Setenv("TOPLINE_QUERY_BASE_URL", server.URL)
+
+	var stdout bytes.Buffer
+	err := Execute(
+		[]string{"query", "audit", "--pipeline", "CLUy1QapsrEeBiNrmQiL", "--since", "2026-05-11", "--until", "2026-05-13"},
+		&stdout, io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(sqls) != 5 {
+		t.Fatalf("expected 5 SQL calls (freshness/snapshot/activity/deals/movement), got %d", len(sqls))
+	}
+	joined := strings.Join(sqls, "\n")
+	for _, view := range []string{"warehouse_freshness", "pipeline_snapshot", "pipeline_activity_window", "pipeline_movement_window"} {
+		if !strings.Contains(joined, view) {
+			t.Fatalf("expected audit to hit %s view; got SQLs:\n%s", view, joined)
+		}
+	}
+	for _, required := range []string{"pipeline_stage_id", "opportunity_status = 'open'", "COUNT(DISTINCT source_id) AS unique_touches", "CAST(avg_days_in_stage AS INTEGER)"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("expected audit SQL to include %q; got SQLs:\n%s", required, joined)
+		}
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode audit output: %v", err)
+	}
+	for _, key := range []string{"freshness", "snapshot", "activity", "deals", "movement", "pipelineId", "window", "status"} {
+		if _, ok := out[key]; !ok {
+			t.Fatalf("audit output missing %q key: %s", key, stdout.String())
+		}
+	}
+}
+
+func TestQueryAuditRequiresPipeline(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+	t.Setenv("TOPLINE_QUERY_BASE_URL", "http://127.0.0.1:1")
+
+	var stdout bytes.Buffer
+	err := Execute([]string{"query", "audit"}, &stdout, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "--pipeline") {
+		t.Fatalf("expected --pipeline usage error, got %v", err)
+	}
+}
