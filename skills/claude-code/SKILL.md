@@ -2,13 +2,36 @@
 
 Use the `topline` CLI for Topline OS CRM workflows that require multiple joins or compact reporting.
 
-Examples:
+## Fast pipeline activity audit
+
+For weekly qualified-pipeline questions, run one compound command instead of manually looping through opportunities, conversations, messages, and tasks:
+
+```bash
+topline --agent pipeline audit \
+  --pipeline-id PIPE \
+  --since this-week-et \
+  --status open
+```
+
+The audit command resolves stages, pulls open opportunities, scans recent conversations, then joins messages/tasks in parallel. If the recent scan is not deep enough for the window, it falls back to per-contact conversation lookups. Prefer this path before raw endpoint calls.
+
+Before trusting a zero-activity result, confirm the returned JSON includes `activityJoinIncluded: true`. If that field is missing or false, the installed CLI is old or the audit was run with `--skip-activity`; treat the output as snapshot-only and run a fallback conversation/message join.
+
+Use the returned `activityJoinStats` and `activeDeals` array first: it already includes opportunity names, stages, values, message counts, human/workflow counts, and per-deal activity counts.
+
+Useful switches:
+
+- `--skip-activity` for snapshot-only count/value/stage breakdown.
+- `--conversation-limit 10` and `--message-limit 30` to tune lookup volume.
+- `--include-tasks false` to skip overdue task hygiene.
+
+## Setup and supporting commands
 
 ```bash
 topline setup-check
-topline --agent pipeline audit --pipeline-id PIPE --since 2026-05-11
+topline opportunities pipelines
 topline opportunities search --pipeline-id PIPE --status open --limit 100
 topline sync init --db topline.db
 ```
 
-Prefer `--agent` for token-efficient, PII-masked output.
+Prefer `--agent` for token-efficient, PII-masked output. Never print PIT/API token values.

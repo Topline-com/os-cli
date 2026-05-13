@@ -59,8 +59,23 @@ topline conversations messages --conversation-id abc123 --limit 10
 Agent-safe output:
 
 ```bash
-topline --agent pipeline audit --pipeline-id CLUy1QapsrEeBiNrmQiL --since 2026-05-11
+topline --agent pipeline audit \
+  --pipeline-id CLUy1QapsrEeBiNrmQiL \
+  --since this-week-et \
+  --status open
 ```
+
+`pipeline audit` now performs the expensive CRM join inside the CLI: open
+opportunities → recent conversations → recent messages → overdue tasks. The CLI
+first scans the 100 most recent conversations and intersects them with open
+pipeline contacts; if that scan is not deep enough to cover the requested window,
+it falls back to per-contact conversation lookups. The JSON includes
+`activityJoinIncluded: true`, `activityJoinStats`, and `activeDeals` summaries
+with opportunity name, stage, value, message count, and per-deal activity counts,
+so agents do not need a second lookup just to name the touched deals. If
+`activityJoinIncluded` is missing or false, do not trust zero activity as a final
+answer; run a fallback conversation/message join. Use `--skip-activity` when you
+only need the open count/value/stage breakdown.
 
 Local SQLite foundation:
 
@@ -106,7 +121,7 @@ Parity command scaffolding exists for the public MCP action surface:
 
 Agent-native foundations included now:
 
-- `pipeline audit`
+- `pipeline audit` with recent conversation scan + parallel message/task joins
 - `sync init`
 - `--agent`
 - `--mask-pii`
@@ -121,7 +136,7 @@ Next commands should be high-level sales workflows, not endpoint wrappers:
 topline deal brief --opportunity-id opp_123
 topline followup queue --pipeline-id pipe_123 --since 2026-05-01
 topline hygiene --pipeline-id pipe_123
-topline activity --pipeline-id pipe_123 --since 2026-05-11 --group-by owner
+topline activity rollup --pipeline-id pipe_123 --since 2026-05-11 --group-by owner
 topline sync run --since 2026-05-01
 ```
 
