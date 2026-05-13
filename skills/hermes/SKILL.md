@@ -1,7 +1,7 @@
 ---
 name: topline-os-cli
 description: Use the Topline OS CLI for SQL-first CRM analytics, pipeline audits, token-efficient reads, deal briefs, and agent-safe sales operations. Default to the composite `topline --agent query audit|snapshot|freshness` commands for standard analytics; use REST-backed commands for live drilldowns and approved writes.
-version: 1.5.0
+version: 1.6.0
 ---
 
 # Topline OS CLI
@@ -45,6 +45,7 @@ For any "what happened in pipeline X over window W" question, run **exactly** th
 - `pipeline audit`, `opportunities search`, `conversations search`, per-conversation message fetches.
 - `python3` / `execute_code` / any subprocess wrapper around `topline` calls. The CLI already returns JSON; parse it in the answer, not in a Python loop.
 - **Bash heredocs around `query sql`**: `SQL=$(cat <<'SQL' ... SQL)` or `topline --agent query sql --sql "$(cat <<SQL ... SQL)"`. Same shape as the Python wrapper anti-pattern, different shell. If you find yourself authoring multi-line SQL in a heredoc for a standard pipeline question, switch to `query audit`.
+- **Post-hoc computation on the `query audit` JSON.** No `python3 - <<'PY' vals=[...]` averages, no `jq` sums, no `awk` totals, no inline bash math over the audit payload. The audit response already contains `activity` (totals + by-stage), `deals` (rollups), `movement` (counts + classification), `snapshot` (avg days in stage, value totals), and `freshness`. If the answer needs a number that isn't in the payload, **express it as SQL and call `topline --agent query sql`** — do not compute it in Python/jq/bash on the JSON the audit just returned. Computing in a wrapper is the same "I rejected the contract" signal as wrapping the CLI in the first place; it just moves the violation past the CLI boundary.
 - `skill_manage` edits to this skill or `topline-os-crm-audits` during the audit. The contract is **read-only during execution**. If the skill is wrong, finish the current run honestly (or stop and disclose the gap), then propose the edit in a separate turn.
 
 Exceptions — each requires the user explicitly asking:
@@ -168,6 +169,7 @@ topline raw request GET /opportunities/search --query '{"pipelineId":"PIPELINE_I
 11. **Wrapping `query sql` in a bash heredoc.** `SQL=$(cat <<'SQL' ... SQL)` or `topline --agent query sql --sql "$(cat <<SQL ... SQL)"` is the same anti-pattern as Python wrapper loops in a different shell. If you are authoring multi-line SQL for a standard pipeline question, switch to `query audit`. If the question genuinely needs raw SQL, keep it inline on `--sql '...'`.
 12. **Editing this skill (or `topline-os-crm-audits`) mid-audit via `skill_manage`.** The contract is read-only during execution. If the skill is wrong, finish the current run honestly (or stop and disclose the gap), then propose the edit in a follow-up turn.
 13. **Prompt-rule tightening instead of primitive design.** If repeated runs keep finding new over-calling shapes (REST fan-out → python wrappers → over-decomposed SQL → bash heredocs), stop adding rules and move the workflow into a composite command/view. The standard pipeline audit is now `query doctor` → `query audit` → answer.
+14. **Doing math on the audit JSON after the fact.** Real failure mode: agent runs `query doctor` + `query audit` cleanly, then opens a `python3 - <<'PY' vals=[...] PY` heredoc (or `jq` / `awk` / bash arithmetic) to compute averages/totals over the audit's `activity.by_stage`, `deals`, or `snapshot` rollups before answering. The audit response already carries those rollups — `activity.total_messages`, `activity.by_stage[*]`, `deals.open_count`, `deals.open_value_total`, `snapshot.avg_days_in_stage`, `movement.advances`/`movement.regresses`/`movement.stalls`. If a question genuinely needs a number not in the payload (e.g. p95 instead of avg), express it as `topline --agent query sql --sql ...` and disclose that it is non-standard analytics. Computing in Python/jq/bash on the audit JSON is the same anti-pattern as wrapping the CLI in Python — it just moves the violation one step past the CLI boundary.
 
 ## Reporting rule of thumb
 

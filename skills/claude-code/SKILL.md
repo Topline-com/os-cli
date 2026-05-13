@@ -17,6 +17,7 @@ For any "what happened in pipeline X over window W" question, run **exactly** th
 - `pipeline audit`, `opportunities search`, `conversations search`, per-conversation message fetches.
 - `python3` / `execute_code` / any subprocess wrapper around `topline`. The CLI returns JSON; parse it directly.
 - **Bash heredocs around `query sql`**: `SQL=$(cat <<'SQL' ... SQL)` or `topline --agent query sql --sql "$(cat <<SQL ... SQL)"`. Same shape as the Python wrapper anti-pattern, different shell. If you find yourself authoring multi-line SQL for a standard pipeline question, switch to `query audit`.
+- **Post-hoc math on the `query audit` JSON.** No `python3` heredocs, `jq` sums, `awk` totals, or bash arithmetic over the audit payload. The audit response already contains `activity` (totals + by-stage), `deals` (rollups), `movement` (counts + classification), `snapshot` (avg days in stage, value totals), and `freshness`. If the answer needs a number that isn't in the payload, express it as SQL via `topline --agent query sql` and disclose. Computing in a wrapper moves the violation past the CLI boundary; it's the same anti-pattern as wrapping the CLI in Python.
 - Editing this skill (or the audits skill) via `skill_manage` mid-run. The contract is read-only during execution; propose edits in a separate turn.
 
 Exceptions — each requires the user explicitly asking:
