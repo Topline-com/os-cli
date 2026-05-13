@@ -6,11 +6,15 @@ Use the `topline` CLI for Topline OS CRM workflows. For broad CRM analytics, **p
 
 For any "what happened in pipeline X over window W" question, run **exactly** this sequence and stop:
 
-1. `topline --agent query doctor` — ONE deterministic readiness probe. JSON: `queryTokenPresent`, `schemaReachable`, `tableCount`, `missingTables`, `recommendation`. If `queryTokenPresent` is false or `schemaReachable` is false, stop and report the readiness gap. If `missingTables` is non-empty, treat each as an `os-mcp` coverage bug and surface it in the final answer.
+1. Readiness probe. Prefer `topline --agent query doctor` when the installed CLI supports it; JSON: `queryTokenPresent`, `schemaReachable`, `tableCount`, `missingTables`, `recommendation`. If the command returns `unknown query command "doctor"`, the binary is stale — rebuild via `scripts/install-local.sh`, or use `topline --agent query help` + `topline --agent query explain --tables opportunities,pipeline_stages,messages,contacts,call_events,appointments` as the fallback probe and proceed with SQL. If `queryTokenPresent` is false, `schemaReachable` is false, or `explain` fails for an expected table, stop and report the readiness gap. If `missingTables` is non-empty, treat each as an `os-mcp` coverage bug and surface it in the final answer.
 2. `topline --agent query sql --sql '<composite audit>'` — ONE call returning open count/value, stage rollup, activity by channel/direction, moved/created/closed deals in window, top active deals. If the window is custom/relative and not already known, prepend a single `date` call before this step.
 3. Answer.
 
-**Hard ceiling: 4 tool calls after skills load** (skills load + doctor + composite SQL + optional `date` + answer). No `pipeline audit`, no `opportunities search`, no `conversations search`, no per-conversation message fetches, no Python verification loops.
+**Hard ceiling: 4 tool calls after skills load** (date if needed + readiness probe + composite SQL + answer). Banned in the default flow:
+
+- `pipeline audit`, `opportunities search`, `conversations search`, per-conversation message fetches.
+- `python3` / `execute_code` / any subprocess wrapper around `topline`. The CLI returns JSON; parse it directly. Reshape data in SQL with a final `SELECT`, not in Python.
+- Editing this skill (or the audits skill) via `skill_manage` mid-run. The contract is read-only during execution; propose edits in a separate turn.
 
 `query doctor` replaces the prior ad-hoc freshness/token probe. Only run a separate freshness SQL (`MAX(_synced_at)` per table) if the user explicitly asks about sync lag.
 

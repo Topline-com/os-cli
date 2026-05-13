@@ -1,7 +1,7 @@
 ---
 name: topline-os-cli
 description: Use the Topline OS CLI for SQL-first CRM analytics, pipeline audits, token-efficient reads, deal briefs, and agent-safe sales operations. Default to the hosted warehouse `topline --agent query` path for analytics; use REST-backed commands for live drilldowns and approved writes.
-version: 1.3.0
+version: 1.4.0
 ---
 
 # Topline OS CLI
@@ -34,11 +34,15 @@ date '+%Y-%m-%d %H:%M:%S %Z (%z); %A; ISO week %V'
 
 For any "what happened in pipeline X over window W" question, run **exactly** this sequence and stop:
 
-1. `topline --agent query doctor` — ONE deterministic readiness probe. If `queryTokenPresent` is false or `schemaReachable` is false, stop and report the readiness gap. If `missingTables` is non-empty, treat each missing table as an `os-mcp` coverage bug and surface it in the final answer.
+1. Readiness probe. Prefer `topline --agent query doctor` when the installed CLI supports it; it returns JSON: `queryTokenPresent`, `tokenSourceEnvVar`, `rawPitRejected`, `baseUrl`, `schemaReachable`, `tableCount`, `expectedTables`, `missingTables`, `recommendation`. If the command returns `unknown query command "doctor"`, the installed binary is stale — rebuild via `scripts/install-local.sh`, or use `topline --agent query help` + `topline --agent query explain --tables opportunities,pipeline_stages,messages,contacts,call_events,appointments` as the fallback readiness check and proceed with SQL. If `queryTokenPresent` is false, `schemaReachable` is false, or `explain` fails for an expected table, stop and report the readiness gap. If `missingTables` is non-empty, treat each missing table as an `os-mcp` coverage bug and surface it in the final answer.
 2. `topline --agent query sql --sql '<composite audit>'` — ONE call, returns: open count/value, stage rollup, activity by channel/direction, moved/created/closed deals in window, top active deals. If the window is custom/relative and not already known, prepend a single `date` call before this step.
 3. Answer.
 
-**Hard ceiling: 4 tool calls after skills load** (skills load + doctor + composite SQL + optional `date` + answer). No `pipeline audit`, no `opportunities search`, no `conversations search`, no per-conversation message fetches, no Python verification loops.
+**Hard ceiling: 4 tool calls after skills load** (date if needed + readiness probe + composite SQL + answer). The following are explicitly banned in the default flow:
+
+- `pipeline audit`, `opportunities search`, `conversations search`, per-conversation message fetches.
+- `python3` / `execute_code` / any subprocess wrapper around `topline` calls. The CLI already returns JSON; parse it in the answer, not in a Python loop. Reshape data inside the SQL with a final `SELECT`, not in a wrapper script.
+- `skill_manage` edits to this skill or `topline-os-crm-audits` during the audit. The contract is **read-only during execution**. If the skill is wrong, finish the current run honestly (or stop and disclose the gap), then propose the edit in a separate turn. Mid-run skill edits invalidate the test trace because the documented contract is no longer what the agent followed.
 
 `query doctor` replaces the prior ad-hoc freshness/token probe — it is faster, deterministic, never prints the token, and surfaces both auth/readiness and warehouse coverage in one JSON payload. Only run a separate freshness SQL (`MAX(_synced_at)` per table) if the user explicitly asks about sync lag.
 
@@ -53,13 +57,13 @@ If `query doctor`'s `recommendation` flags stale data or coverage gaps, disclose
 ## Hosted warehouse SQL (preferred for analytics)
 
 ```bash
-topline --agent query doctor
-topline --agent query schema     # only when doctor flags schema not cached or stale
+topline --agent query doctor           # preferred — deterministic readiness probe, returns JSON
+topline --agent query help             # fallback if the installed binary predates `query doctor`
 topline --agent query explain --tables opportunities,pipeline_stages,messages,contacts,call_events,appointments
 topline --agent query sql --sql 'SELECT status, COUNT(*) AS n FROM opportunities GROUP BY status ORDER BY n DESC'
 ```
 
-If `doctor` reports `queryTokenPresent: false` or `schemaReachable: false`, stop and ask the user to mint/configure a connection-bound query token. Do not silently fall back to REST and present it as the SQL-first result.
+If `query doctor` returns `unknown query command "doctor"`, the installed binary is stale — rebuild via `scripts/install-local.sh` in the `Topline-com/os-cli` checkout, or use `query help` + `query explain` as the fallback probe and proceed with SQL. If `doctor` reports `queryTokenPresent: false` or `schemaReachable: false`, stop and ask the user to mint/configure a connection-bound query token. Do not silently fall back to REST and present it as the SQL-first result.
 
 Qualified-pipeline weekly activity sample:
 
@@ -140,6 +144,8 @@ topline raw request GET /opportunities/search --query '{"pipelineId":"PIPELINE_I
 7. **Printing secrets or full PII.** PITs, query tokens, phone numbers, and credentials never belong in logs, memory, or summaries.
 8. **Silent writes.** For mutating commands, get explicit approval and state the exact contact / opportunity / action first.
 9. **Treating masked `--agent` JSON as machine-parseable for pagination.** `--agent` enables PII masking and may replace numeric pagination fields like `startAfter` with `[PHONE]`, which makes the output invalid JSON. For internal follow-up scripts, use unmasked CLI output into temp files, parse locally, and delete the files before finishing.
+10. **Wrapping `topline` in `python3` / `execute_code` / `subprocess.run` to "verify" or "reshape" CLI output.** The CLI already returns JSON; parse it directly in the answer. Python wrapper loops are the new shape of the old REST-fan-out anti-pattern — they blow the 4-call ceiling, hide the actual data path, and produce nothing the SQL composite did not already return. If you genuinely need to reshape data, do it in the SQL itself with a final `SELECT`, not in Python around the CLI.
+11. **Editing this skill (or `topline-os-crm-audits`) mid-audit via `skill_manage`.** The contract is read-only during execution. If the skill is wrong, finish the current run honestly (or stop and disclose the gap), then propose the edit in a follow-up turn. Mid-run edits invalidate the test trace because the documented contract is no longer what the agent followed.
 
 ## Reporting rule of thumb
 
