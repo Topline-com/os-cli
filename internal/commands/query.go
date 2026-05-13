@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Topline-com/os-cli/internal/output"
 	"github.com/Topline-com/os-cli/internal/topline"
@@ -66,6 +67,12 @@ func runQueryCommand(args []string, stdout io.Writer, globals globalOptions) err
 			return errors.New("usage: topline query sql --sql 'SELECT COUNT(*) FROM contacts' [--url https://os-mcp.topline.com]")
 		}
 		err = client.PostJSON(ctx, "/query/api/execute-sql", map[string]any{"sql": sqlText}, &result)
+	case "freshness":
+		return runQueryFreshness(ctx, client, stdout, globals)
+	case "snapshot":
+		return runQuerySnapshot(ctx, client, flags, stdout, globals)
+	case "audit":
+		return runQueryAudit(ctx, client, flags, stdout, globals)
 	default:
 		return fmt.Errorf("unknown query command %q; try topline query help", subcommand)
 	}
@@ -84,6 +91,13 @@ func printQueryHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  topline query catalog")
 	_, _ = fmt.Fprintln(w, "  topline query explain --tables contacts,opportunities")
 	_, _ = fmt.Fprintln(w, "  topline query sql --sql 'SELECT COUNT(*) AS n FROM contacts'")
+	_, _ = fmt.Fprintln(w, "  topline query freshness")
+	_, _ = fmt.Fprintln(w, "  topline query snapshot --pipeline <id>")
+	_, _ = fmt.Fprintln(w, "  topline query audit --pipeline <id> [--since this-week-et] [--status open]")
+	_, _ = fmt.Fprintln(w, "")
+	_, _ = fmt.Fprintln(w, "Composite commands (Phase 3): one CLI call wraps the warehouse views")
+	_, _ = fmt.Fprintln(w, "shipped in Topline-com/os-mcp#1. Use these for pipeline audits instead")
+	_, _ = fmt.Fprintln(w, "of hand-stitched CTEs.")
 	_, _ = fmt.Fprintln(w, "")
 	_, _ = fmt.Fprintln(w, "Environment:")
 	_, _ = fmt.Fprintln(w, "  TOPLINE_QUERY_TOKEN       Connection-bound token from https://os-mcp.topline.com/connect")
@@ -220,4 +234,160 @@ func firstNonEmptyQueryFlag(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// executeSQL runs one SQL against /query/api/execute-sql and returns the parsed
+// response shape as map[string]any. Used by the composite commands to wrap the
+// warehouse views shipped in Topline-com/os-mcp#1.
+func executeSQL(ctx context.Context, client *topline.QueryClient, sql string) (map[string]any, error) {
+	var raw any
+	if err := client.PostJSON(ctx, "/query/api/execute-sql", map[string]any{"sql": sql}, &raw); err != nil {
+		return nil, err
+	}
+	if m, ok := raw.(map[string]any); ok {
+		return m, nil
+	}
+	return map[string]any{"raw": raw}, nil
+}
+
+func runQueryFreshness(ctx context.Context, client *topline.QueryClient, stdout io.Writer, globals globalOptions) error {
+	const sqlText = "SELECT table_name, row_count, last_synced_at, lag_seconds FROM warehouse_freshness ORDER BY table_name"
+	result, err := executeSQL(ctx, client, sqlText)
+	if err != nil {
+		return err
+	}
+	return output.WriteJSON(stdout, result, globals.MaskPII)
+}
+
+func runQuerySnapshot(ctx context.Context, client *topline.QueryClient, flags map[string]string, stdout io.Writer, globals globalOptions) error {
+	pipelineID := strings.TrimSpace(firstNonEmptyQueryFlag(flags["pipeline"], flags["pipelineId"], flags["pipelineID"]))
+	if pipelineID == "" {
+		return errors.New("usage: topline query snapshot --pipeline <pipeline_id>")
+	}
+	status := strings.TrimSpace(flags["status"])
+	if status == "" {
+		status = "open"
+	}
+	sqlText := fmt.Sprintf(
+		"SELECT pipeline_id, pipeline_name, pipeline_stage_id, stage_name, stage_position, opportunity_status, "+
+			"opportunity_count, pipeline_value, CAST(avg_days_in_stage AS INTEGER) AS avg_days_in_stage "+
+			"FROM pipeline_snapshot WHERE pipeline_id = %s%s ORDER BY stage_position",
+		sqlString(pipelineID), queryStatusClause("opportunity_status", status),
+	)
+	result, err := executeSQL(ctx, client, sqlText)
+	if err != nil {
+		return err
+	}
+	return output.WriteJSON(stdout, result, globals.MaskPII)
+}
+
+func runQueryAudit(ctx context.Context, client *topline.QueryClient, flags map[string]string, stdout io.Writer, globals globalOptions) error {
+	pipelineID := strings.TrimSpace(firstNonEmptyQueryFlag(flags["pipeline"], flags["pipelineId"], flags["pipelineID"]))
+	if pipelineID == "" {
+		return errors.New("usage: topline query audit --pipeline <pipeline_id> [--since this-week-et] [--status open]")
+	}
+	start, err := parseAuditTime(flags["since"], time.Now().AddDate(0, 0, -7))
+	if err != nil {
+		return err
+	}
+	end, err := parseAuditTime(flags["until"], time.Now())
+	if err != nil {
+		return err
+	}
+	since := start.UTC().Format(time.RFC3339)
+	until := end.UTC().Format(time.RFC3339)
+	status := strings.TrimSpace(flags["status"])
+	if status == "" {
+		status = "open"
+	}
+	dealLimit := parsePositiveInt(flags["limit"], 25)
+	if dealLimit > 100 {
+		dealLimit = 100
+	}
+	statusClause := queryStatusClause("opportunity_status", status)
+
+	freshnessSQL := "SELECT table_name, row_count, last_synced_at, lag_seconds FROM warehouse_freshness ORDER BY table_name"
+	snapshotSQL := fmt.Sprintf(
+		"SELECT pipeline_id, pipeline_name, pipeline_stage_id, stage_name, stage_position, opportunity_status, "+
+			"opportunity_count, pipeline_value, CAST(avg_days_in_stage AS INTEGER) AS avg_days_in_stage "+
+			"FROM pipeline_snapshot WHERE pipeline_id = %s%s ORDER BY stage_position",
+		sqlString(pipelineID), statusClause,
+	)
+	activitySQL := fmt.Sprintf(
+		"SELECT activity_class, direction, COUNT(DISTINCT source_id) AS unique_touches, "+
+			"COUNT(DISTINCT opportunity_id) AS opportunities_touched, COUNT(DISTINCT contact_id) AS contacts_touched, "+
+			"MIN(event_at) AS first_touch, MAX(event_at) AS last_touch "+
+			"FROM pipeline_activity_window WHERE pipeline_id = %s%s AND event_at >= %s AND event_at <= %s "+
+			"GROUP BY activity_class, direction ORDER BY unique_touches DESC",
+		sqlString(pipelineID), statusClause, sqlString(since), sqlString(until),
+	)
+	dealsSQL := fmt.Sprintf(
+		"SELECT opportunity_id, opportunity_name, contact_id, pipeline_stage_id, owner_user_id, ROUND(monetary_value, 2) AS monetary_value, "+
+			"COUNT(DISTINCT source_id) AS unique_touches, "+
+			"COUNT(DISTINCT CASE WHEN activity_class = 'message' THEN source_id END) AS message_touches, "+
+			"COUNT(DISTINCT CASE WHEN activity_class = 'call' THEN source_id END) AS call_touches, "+
+			"COUNT(DISTINCT CASE WHEN activity_class = 'appointment' THEN source_id END) AS appointment_touches, "+
+			"COUNT(DISTINCT CASE WHEN direction = 'inbound' THEN source_id END) AS inbound_touches, "+
+			"COUNT(DISTINCT CASE WHEN direction = 'outbound' THEN source_id END) AS outbound_touches, "+
+			"MIN(event_at) AS first_touch, MAX(event_at) AS last_touch "+
+			"FROM pipeline_activity_window WHERE pipeline_id = %s%s AND event_at >= %s AND event_at <= %s "+
+			"GROUP BY opportunity_id, opportunity_name, contact_id, pipeline_stage_id, owner_user_id, monetary_value "+
+			"ORDER BY unique_touches DESC, monetary_value DESC LIMIT %d",
+		sqlString(pipelineID), statusClause, sqlString(since), sqlString(until), dealLimit,
+	)
+	movementSQL := fmt.Sprintf(
+		"SELECT opportunity_id, opportunity_name, contact_id, pipeline_stage_id, stage_name, opportunity_status, monetary_value, "+
+			"last_movement_at, last_movement_kind "+
+			"FROM pipeline_movement_window WHERE pipeline_id = %s%s AND last_movement_at >= %s AND last_movement_at <= %s "+
+			"ORDER BY last_movement_at DESC",
+		sqlString(pipelineID), statusClause, sqlString(since), sqlString(until),
+	)
+
+	freshness, err := executeSQL(ctx, client, freshnessSQL)
+	if err != nil {
+		return err
+	}
+	snapshot, err := executeSQL(ctx, client, snapshotSQL)
+	if err != nil {
+		return err
+	}
+	activity, err := executeSQL(ctx, client, activitySQL)
+	if err != nil {
+		return err
+	}
+	deals, err := executeSQL(ctx, client, dealsSQL)
+	if err != nil {
+		return err
+	}
+	movement, err := executeSQL(ctx, client, movementSQL)
+	if err != nil {
+		return err
+	}
+
+	result := map[string]any{
+		"pipelineId": pipelineID,
+		"window":     map[string]string{"since": since, "until": until},
+		"status":     status,
+		"freshness":  freshness,
+		"snapshot":   snapshot,
+		"activity":   activity,
+		"deals":      deals,
+		"movement":   movement,
+	}
+	return output.WriteJSON(stdout, result, globals.MaskPII)
+}
+
+// sqlString quotes a value as a SQLite single-quoted literal. Used because the
+// query API doesn't yet accept bind parameters — pipeline IDs are caller-controlled
+// CRM identifiers, not user input, but we still escape embedded single-quotes.
+func sqlString(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
+}
+
+func queryStatusClause(column string, status string) string {
+	trimmed := strings.TrimSpace(status)
+	if trimmed == "" || strings.EqualFold(trimmed, "all") || strings.EqualFold(trimmed, "any") {
+		return ""
+	}
+	return fmt.Sprintf(" AND %s = %s", column, sqlString(trimmed))
 }
