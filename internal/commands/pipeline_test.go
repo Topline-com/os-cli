@@ -157,6 +157,104 @@ func TestPipelineAuditFetchesActivityConcurrently(t *testing.T) {
 	}
 }
 
+func TestPipelineAuditPaginatesOpportunities(t *testing.T) {
+	t.Setenv("TOPLINE_PIT", "example-token")
+	t.Setenv("TOPLINE_LOCATION_ID", "loc_default")
+
+	var mu sync.Mutex
+	queries := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		queries = append(queries, r.URL.RawQuery)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/opportunities/pipelines":
+			_, _ = w.Write([]byte(`{"pipelines":[{"id":"pipe_triage","name":"Triage","stages":[{"id":"stage_new","name":"New"},{"id":"stage_hold","name":"Hold"}]}]}`))
+		case "/opportunities/search":
+			q := r.URL.Query()
+			if q.Get("location_id") != "loc_123" || q.Get("pipeline_id") != "pipe_triage" || q.Get("status") != "open" || q.Get("limit") != "2" {
+				t.Fatalf("opportunity query mismatch: %s", r.URL.RawQuery)
+			}
+			if q.Get("startAfter") == "" && q.Get("startAfterId") == "" {
+				_, _ = w.Write([]byte(`{
+					"opportunities":[
+						{"id":"opp_1","contactId":"contact_1","name":"One","pipelineStageId":"stage_new","status":"open","monetaryValue":100},
+						{"id":"opp_2","contactId":"contact_2","name":"Two","pipelineStageId":"stage_hold","status":"open","monetaryValue":200}
+					],
+					"meta":{"nextPage":2,"startAfter":1700000000000,"startAfterId":"opp_2","total":3}
+				}`))
+				return
+			}
+			if q.Get("startAfter") != "1700000000000" || q.Get("startAfterId") != "opp_2" {
+				t.Fatalf("pagination cursor mismatch: %s", r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(`{
+				"opportunities":[
+					{"id":"opp_3","contactId":"contact_3","name":"Three","pipelineStageId":"stage_hold","status":"open","monetaryValue":300}
+				],
+				"meta":{"nextPage":null,"total":3}
+			}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := Execute([]string{
+		"--base-url", server.URL,
+		"--location-id", "loc_123",
+		"--agent",
+		"pipeline", "audit",
+		"--pipeline-id", "pipe_triage",
+		"--since", "2026-05-11T00:00:00Z",
+		"--until", "2026-05-13T00:00:00Z",
+		"--limit", "2",
+		"--skip-activity",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v\nstderr=%s", err, stderr.String())
+	}
+
+	var out struct {
+		OpenDeals      int `json:"openDeals"`
+		StageBreakdown []struct {
+			Name  string  `json:"name"`
+			Deals int     `json:"deals"`
+			Value float64 `json:"value"`
+		} `json:"stageBreakdown"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, stdout.String())
+	}
+	if out.OpenDeals != 3 {
+		t.Fatalf("expected all paginated opportunities, got %d; output=%s", out.OpenDeals, stdout.String())
+	}
+	stageDeals := map[string]int{}
+	stageValue := map[string]float64{}
+	for _, stage := range out.StageBreakdown {
+		stageDeals[stage.Name] = stage.Deals
+		stageValue[stage.Name] = stage.Value
+	}
+	if stageDeals["New"] != 1 || stageDeals["Hold"] != 2 || stageValue["Hold"] != 500 {
+		t.Fatalf("stage breakdown did not include all pages: deals=%#v values=%#v output=%s", stageDeals, stageValue, stdout.String())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	opportunitySearches := 0
+	for _, raw := range queries {
+		if strings.Contains(raw, "pipeline_id=pipe_triage") {
+			opportunitySearches++
+		}
+	}
+	if opportunitySearches != 2 {
+		t.Fatalf("expected two opportunity pages, got %d queries=%#v", opportunitySearches, queries)
+	}
+}
+
 func TestParseAuditTimeThisWeekET(t *testing.T) {
 	now := time.Date(2026, 5, 12, 20, 30, 0, 0, time.UTC)
 	got, err := parseAuditTimeWithNow("this-week-et", time.Time{}, now)

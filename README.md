@@ -65,9 +65,11 @@ topline --agent pipeline audit \
   --status open
 ```
 
-`pipeline audit` now performs the expensive CRM join inside the CLI: open
-opportunities → recent conversations → recent messages → overdue tasks. The CLI
-first scans the 100 most recent conversations and intersects them with open
+`pipeline audit` now performs the expensive CRM join inside the CLI: paginated
+open opportunities → recent conversations → recent messages → overdue tasks. It
+fetches every opportunity page for the selected pipeline/status before building
+counts, values, and stage summaries. The CLI first scans the 100 most recent
+conversations and intersects them with open
 pipeline contacts; if that scan is not deep enough to cover the requested window,
 it falls back to per-contact conversation lookups. The JSON includes
 `activityJoinIncluded: true`, `activityJoinStats`, and `activeDeals` summaries
