@@ -31,12 +31,13 @@ type Task struct {
 }
 
 type PipelineAuditInput struct {
-	PipelineName  string         `json:"pipelineName"`
-	Start         time.Time      `json:"start"`
-	End           time.Time      `json:"end"`
-	Opportunities []Opportunity  `json:"opportunities"`
-	Messages      []MessageEvent `json:"messages"`
-	Tasks         []Task         `json:"tasks"`
+	PipelineName         string         `json:"pipelineName"`
+	Start                time.Time      `json:"start"`
+	End                  time.Time      `json:"end"`
+	Opportunities        []Opportunity  `json:"opportunities"`
+	Messages             []MessageEvent `json:"messages"`
+	Tasks                []Task         `json:"tasks"`
+	ActivityJoinIncluded bool           `json:"activityJoinIncluded"`
 }
 
 type StageSummary struct {
@@ -77,23 +78,29 @@ type PipelineAudit struct {
 	WindowEnd             time.Time           `json:"windowEnd"`
 	OpenDeals             int                 `json:"openDeals"`
 	OpenValue             float64             `json:"openValue"`
+	ActivityJoinIncluded  bool                `json:"activityJoinIncluded"`
 	ActiveDealsThisWindow int                 `json:"activeDealsThisWindow"`
 	ActivityCounts        map[string]int      `json:"activityCounts"`
 	StageBreakdown        []StageSummary      `json:"stageBreakdown"`
 	HygieneFlags          []HygieneFlag       `json:"hygieneFlags"`
 	ActiveOpportunityIDs  []string            `json:"activeOpportunityIds"`
-	ActiveDeals           []ActiveDealSummary `json:"activeDeals,omitempty"`
+	ActiveDeals           []ActiveDealSummary `json:"activeDeals"`
 	LookupErrors          []LookupError       `json:"lookupErrors,omitempty"`
 	OpenContacts          map[string]string   `json:"-"`
 }
 
 func BuildPipelineAudit(in PipelineAuditInput) PipelineAudit {
 	a := PipelineAudit{
-		PipelineName:   in.PipelineName,
-		WindowStart:    in.Start,
-		WindowEnd:      in.End,
-		ActivityCounts: map[string]int{"Email": 0, "SMS": 0, "Call": 0},
-		OpenContacts:   map[string]string{},
+		PipelineName:         in.PipelineName,
+		WindowStart:          in.Start,
+		WindowEnd:            in.End,
+		ActivityJoinIncluded: in.ActivityJoinIncluded,
+		ActivityCounts:       map[string]int{"Email": 0, "SMS": 0, "Call": 0},
+		StageBreakdown:       []StageSummary{},
+		HygieneFlags:         []HygieneFlag{},
+		ActiveOpportunityIDs: []string{},
+		ActiveDeals:          []ActiveDealSummary{},
+		OpenContacts:         map[string]string{},
 	}
 	stages := map[string]*StageSummary{}
 	oppByContact := map[string]string{}

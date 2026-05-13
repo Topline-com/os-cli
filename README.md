@@ -69,10 +69,12 @@ topline --agent pipeline audit \
 opportunities → contact conversations → recent messages → overdue tasks. The
 lookups run in parallel, so a weekly qualified-pipeline activity report is one
 agent command instead of dozens of sequential calls. The JSON includes
-`activeDeals` summaries with opportunity name, stage, value, message count, and
-per-deal activity counts, so agents do not need a second lookup just to name the
-touched deals. Use `--skip-activity` when you only need the open pipeline
-snapshot.
+`activityJoinIncluded: true` plus `activeDeals` summaries with opportunity name,
+stage, value, message count, and per-deal activity counts, so agents do not need
+a second lookup just to name the touched deals. If `activityJoinIncluded` is
+missing or false, do not trust zero activity as a final answer; run a fallback
+conversation/message join. Use `--skip-activity` when you only need the open
+pipeline snapshot.
 
 Local SQLite foundation:
 

@@ -89,6 +89,7 @@ func TestPipelineAuditFetchesActivityConcurrently(t *testing.T) {
 	var out struct {
 		PipelineName          string         `json:"pipelineName"`
 		OpenDeals             int            `json:"openDeals"`
+		ActivityJoinIncluded  bool           `json:"activityJoinIncluded"`
 		ActiveDealsThisWindow int            `json:"activeDealsThisWindow"`
 		ActivityCounts        map[string]int `json:"activityCounts"`
 		ActiveOpportunityIDs  []string       `json:"activeOpportunityIds"`
@@ -108,6 +109,9 @@ func TestPipelineAuditFetchesActivityConcurrently(t *testing.T) {
 	}
 	if out.PipelineName != "Qualified" || out.OpenDeals != 2 {
 		t.Fatalf("pipeline/open summary mismatch: %#v", out)
+	}
+	if !out.ActivityJoinIncluded {
+		t.Fatalf("expected activityJoinIncluded=true so zero activity reports can be trusted")
 	}
 	if out.ActiveDealsThisWindow != 1 {
 		t.Fatalf("expected one active deal from joined messages, got %d; output=%s", out.ActiveDealsThisWindow, stdout.String())

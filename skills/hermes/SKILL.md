@@ -45,7 +45,9 @@ topline --agent pipeline audit \
 
 The contact/message/task reads are parallelized, so agents should not hand-roll sequential loops unless the command is missing a field they need.
 
-The JSON includes `activeDeals` with opportunity name, stage, value, message count, human/workflow counts, and per-deal activity counts. Use those summaries directly before making any follow-up lookup.
+The JSON must include `activityJoinIncluded: true` before you trust zero activity. It also includes `activeDeals` with opportunity name, stage, value, message count, human/workflow counts, and per-deal activity counts. Use those summaries directly before making any follow-up lookup.
+
+If `activityJoinIncluded` is missing or false, the installed CLI is old or the audit was run with `--skip-activity`; treat the output as snapshot-only and run a fallback conversation/message join before saying there was no activity.
 
 Use these flags when needed:
 

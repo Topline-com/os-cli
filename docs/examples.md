@@ -12,8 +12,10 @@ topline --agent pipeline audit \
 
 This single command resolves the pipeline/stage map, pulls open opportunities,
 and joins contact conversations, recent messages, and overdue tasks in parallel.
-The response includes `activeDeals` with deal names, stages, values, and
-per-deal activity counts so an agent can answer the sales question directly.
+The response includes `activityJoinIncluded: true` and `activeDeals` with deal
+names, stages, values, and per-deal activity counts so an agent can answer the
+sales question directly. If `activityJoinIncluded` is missing or false, use a
+fallback conversation/message join before reporting zero activity.
 Use `--skip-activity` for a fast snapshot-only count/value/stage breakdown.
 
 ## Search open opportunities

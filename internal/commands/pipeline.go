@@ -96,10 +96,11 @@ func runPipelineAudit(args []string, stdout io.Writer, globals globalOptions) er
 	messages := []reports.MessageEvent(nil)
 	tasks := []reports.Task(nil)
 	lookupErrors := []reports.LookupError(nil)
-	if includePipelineActivity(flags) {
+	activityJoinIncluded := includePipelineActivity(flags)
+	if activityJoinIncluded {
 		messages, tasks, lookupErrors = collectPipelineAuditActivity(context.Background(), client, cfg.LocationID, start, end, opps, flags)
 	}
-	audit := reports.BuildPipelineAudit(reports.PipelineAuditInput{PipelineName: pipelineName, Start: start, End: end, Opportunities: opps, Messages: messages, Tasks: tasks})
+	audit := reports.BuildPipelineAudit(reports.PipelineAuditInput{PipelineName: pipelineName, Start: start, End: end, Opportunities: opps, Messages: messages, Tasks: tasks, ActivityJoinIncluded: activityJoinIncluded})
 	audit.LookupErrors = lookupErrors
 	return output.WriteJSON(stdout, audit, globals.MaskPII)
 }
