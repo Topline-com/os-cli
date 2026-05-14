@@ -1,7 +1,7 @@
 ---
 name: topline-os-cli
 description: Use the Topline OS CLI for SQL-first CRM analytics, pipeline audits, token-efficient reads, deal briefs, and agent-safe sales operations. Default to the composite `topline --agent query audit|snapshot|freshness` commands for standard analytics; use REST-backed commands for live drilldowns and approved writes.
-version: 1.6.0
+version: 1.6.1
 ---
 
 # Topline OS CLI
@@ -170,6 +170,8 @@ topline raw request GET /opportunities/search --query '{"pipelineId":"PIPELINE_I
 12. **Editing this skill (or `topline-os-crm-audits`) mid-audit via `skill_manage`.** The contract is read-only during execution. If the skill is wrong, finish the current run honestly (or stop and disclose the gap), then propose the edit in a follow-up turn.
 13. **Prompt-rule tightening instead of primitive design.** If repeated runs keep finding new over-calling shapes (REST fan-out → python wrappers → over-decomposed SQL → bash heredocs), stop adding rules and move the workflow into a composite command/view. The standard pipeline audit is now `query doctor` → `query audit` → answer.
 14. **Doing math on the audit JSON after the fact.** Real failure mode: agent runs `query doctor` + `query audit` cleanly, then opens a `python3 - <<'PY' vals=[...] PY` heredoc (or `jq` / `awk` / bash arithmetic) to compute averages/totals over the audit's `activity.by_stage`, `deals`, or `snapshot` rollups before answering. The audit response already carries those rollups — `activity.total_messages`, `activity.by_stage[*]`, `deals.open_count`, `deals.open_value_total`, `snapshot.avg_days_in_stage`, `movement.advances`/`movement.regresses`/`movement.stalls`. If a question genuinely needs a number not in the payload (e.g. p95 instead of avg), express it as `topline --agent query sql --sql ...` and disclose that it is non-standard analytics. Computing in Python/jq/bash on the audit JSON is the same anti-pattern as wrapping the CLI in Python — it just moves the violation one step past the CLI boundary.
+15. **Treating current pipeline as historical origin.** The `opportunities` warehouse table exposes current pipeline/stage state; it does not, by itself, prove that a won Qualified opportunity started in Triage. For Flex conversion questions, answer in two layers: (a) direct/current-state query (current pipeline = `Sales - Flex - Qualified`, status = won, created/closed in window); (b) lineage confidence caveat unless a history/audit table or activity event explicitly records the pipeline move. Do not report "originated in Triage" as proven just because the deal is now in Qualified. See `references/flex-crm-lineage-and-manual-outreach.md`.
+16. **Counting automated workflow touches as rep effort.** For manual outreach/activity audits, exclude workflow/app automation. In the hosted warehouse, use message/activity metadata such as `raw_payload.source = 'app'` as the automation exclusion signal when available, then break out calls/email/SMS separately and report contact counts.
 
 ## Reporting rule of thumb
 
