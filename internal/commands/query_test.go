@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -371,5 +372,218 @@ func TestQueryAuditRequiresPipeline(t *testing.T) {
 	err := Execute([]string{"query", "audit"}, &stdout, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "--pipeline") {
 		t.Fatalf("expected --pipeline usage error, got %v", err)
+	}
+}
+
+// extractLikeNeedles pulls every lowercased LIKE '%needle%' literal out of sql.
+// Used by the fixture server below to mimic SQLite's LIKE behaviour without
+// pulling in a real database for tests.
+func extractLikeNeedles(sql string) []string {
+	out := []string{}
+	rest := sql
+	for {
+		idx := strings.Index(rest, "LIKE '%")
+		if idx < 0 {
+			return out
+		}
+		rest = rest[idx+len("LIKE '%"):]
+		end := strings.Index(rest, "%'")
+		if end < 0 {
+			return out
+		}
+		out = append(out, strings.ToLower(rest[:end]))
+		rest = rest[end+2:]
+	}
+}
+
+// pipelineLookupServer answers pipelines-resolution SELECTs from a fixture and
+// records every SQL call so tests can assert ordering and content.
+type pipelineLookupServer struct {
+	t         *testing.T
+	pipelines []idNamePair // fixture pipelines table
+	sqls      []string
+}
+
+func (s *pipelineLookupServer) handle(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/query/api/execute-sql" {
+		s.t.Fatalf("path = %q", r.URL.Path)
+	}
+	var body struct {
+		SQL string `json:"sql"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	s.sqls = append(s.sqls, body.SQL)
+
+	w.Header().Set("Content-Type", "application/json")
+	sql := body.SQL
+	if strings.Contains(sql, "FROM pipelines") {
+		// Parse out every LIKE '%token%' fragment and require all to match
+		// (case-insensitively), mirroring SQLite's behaviour for our resolver SQL.
+		needles := extractLikeNeedles(sql)
+		matches := make([]idNamePair, 0, len(s.pipelines))
+		for _, p := range s.pipelines {
+			lname := strings.ToLower(p.Name)
+			ok := true
+			for _, n := range needles {
+				if !strings.Contains(lname, n) {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				matches = append(matches, p)
+			}
+		}
+		rows := make([]string, 0, len(matches))
+		for _, p := range matches {
+			rows = append(rows, fmt.Sprintf(`["%s","%s"]`, p.ID, p.Name))
+		}
+		_, _ = fmt.Fprintf(w, `{"columns":["id","name"],"rows":[%s]}`, strings.Join(rows, ","))
+		return
+	}
+	_, _ = w.Write([]byte(`{"columns":[],"rows":[]}`))
+}
+
+func TestQueryAuditResolvesPipelineByName(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+
+	srv := &pipelineLookupServer{
+		t: t,
+		pipelines: []idNamePair{
+			{ID: "bna6e9DoPgRchNsjeYS3", Name: "Sales - Flex - Triage"},
+			{ID: "CLUy1QapsrEeBiNrmQiL", Name: "Sales - Flex - Qualified"},
+		},
+	}
+	server := httptest.NewServer(http.HandlerFunc(srv.handle))
+	defer server.Close()
+	t.Setenv("TOPLINE_QUERY_BASE_URL", server.URL)
+
+	var stdout bytes.Buffer
+	err := Execute(
+		[]string{"query", "audit", "--pipeline", "flex triage", "--since", "2026-05-11", "--until", "2026-05-13"},
+		&stdout, io.Discard,
+	)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(srv.sqls) != 6 {
+		t.Fatalf("expected 6 SQL calls (1 resolver + 5 audit), got %d:\n%s", len(srv.sqls), strings.Join(srv.sqls, "\n---\n"))
+	}
+	if !strings.Contains(srv.sqls[0], "FROM pipelines") {
+		t.Fatalf("first SQL should resolve pipeline name; got %q", srv.sqls[0])
+	}
+	// Every pipeline-scoped audit SQL should bind the resolved ID. The freshness
+	// query is global (no pipeline filter), so skip it.
+	pipelineScoped := 0
+	for _, q := range srv.sqls[1:] {
+		if strings.Contains(q, "FROM warehouse_freshness") {
+			continue
+		}
+		pipelineScoped++
+		if !strings.Contains(q, "'bna6e9DoPgRchNsjeYS3'") {
+			t.Fatalf("audit SQL should bind resolved ID; got %q", q)
+		}
+	}
+	if pipelineScoped != 4 {
+		t.Fatalf("expected 4 pipeline-scoped audit SQLs (snapshot/activity/deals/movement), got %d", pipelineScoped)
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode audit output: %v", err)
+	}
+	resolution, ok := out["pipelineResolution"].(map[string]any)
+	if !ok {
+		t.Fatalf("audit output missing pipelineResolution: %s", stdout.String())
+	}
+	if got, _ := resolution["matchedBy"].(string); got != "name" {
+		t.Fatalf("pipelineResolution.matchedBy = %q, want \"name\"", got)
+	}
+	if got, _ := resolution["matchedId"].(string); got != "bna6e9DoPgRchNsjeYS3" {
+		t.Fatalf("pipelineResolution.matchedId = %q", got)
+	}
+	if got, _ := resolution["matchedName"].(string); got != "Sales - Flex - Triage" {
+		t.Fatalf("pipelineResolution.matchedName = %q", got)
+	}
+	if got, _ := out["pipelineId"].(string); got != "bna6e9DoPgRchNsjeYS3" {
+		t.Fatalf("audit pipelineId = %q, want resolved id", got)
+	}
+}
+
+func TestQueryAuditUnknownPipelineListsCandidates(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+
+	srv := &pipelineLookupServer{
+		t: t,
+		pipelines: []idNamePair{
+			{ID: "bna6e9DoPgRchNsjeYS3", Name: "Sales - Flex - Triage"},
+			{ID: "CLUy1QapsrEeBiNrmQiL", Name: "Sales - Flex - Qualified"},
+		},
+	}
+	server := httptest.NewServer(http.HandlerFunc(srv.handle))
+	defer server.Close()
+	t.Setenv("TOPLINE_QUERY_BASE_URL", server.URL)
+
+	var stdout bytes.Buffer
+	err := Execute([]string{"query", "audit", "--pipeline", "nonexistent"}, &stdout, io.Discard)
+	if err == nil {
+		t.Fatalf("expected error for unknown pipeline name, got nil; stdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "no pipeline matched") {
+		t.Fatalf("error should mention no match; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Sales - Flex - Triage") || !strings.Contains(err.Error(), "Sales - Flex - Qualified") {
+		t.Fatalf("error should list available pipelines; got %v", err)
+	}
+}
+
+func TestQueryAuditAmbiguousPipelineErrors(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+
+	srv := &pipelineLookupServer{
+		t: t,
+		pipelines: []idNamePair{
+			{ID: "bna6e9DoPgRchNsjeYS3", Name: "Sales - Flex - Triage"},
+			{ID: "CLUy1QapsrEeBiNrmQiL", Name: "Sales - Flex - Qualified"},
+		},
+	}
+	server := httptest.NewServer(http.HandlerFunc(srv.handle))
+	defer server.Close()
+	t.Setenv("TOPLINE_QUERY_BASE_URL", server.URL)
+
+	var stdout bytes.Buffer
+	err := Execute([]string{"query", "audit", "--pipeline", "flex"}, &stdout, io.Discard)
+	if err == nil {
+		t.Fatalf("expected ambiguity error, got nil; stdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("error should call out ambiguity; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Sales - Flex - Triage") || !strings.Contains(err.Error(), "Sales - Flex - Qualified") {
+		t.Fatalf("error should list both candidates; got %v", err)
+	}
+}
+
+func TestQuerySnapshotResolvesPipelineByName(t *testing.T) {
+	t.Setenv("TOPLINE_QUERY_TOKEN", "signed-query-token")
+
+	srv := &pipelineLookupServer{
+		t: t,
+		pipelines: []idNamePair{
+			{ID: "bna6e9DoPgRchNsjeYS3", Name: "Sales - Flex - Triage"},
+		},
+	}
+	server := httptest.NewServer(http.HandlerFunc(srv.handle))
+	defer server.Close()
+	t.Setenv("TOPLINE_QUERY_BASE_URL", server.URL)
+
+	var stdout bytes.Buffer
+	if err := Execute([]string{"query", "snapshot", "--pipeline", "triage"}, &stdout, io.Discard); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(srv.sqls) != 2 {
+		t.Fatalf("expected 2 SQL calls (resolver + snapshot), got %d", len(srv.sqls))
+	}
+	if !strings.Contains(srv.sqls[1], "'bna6e9DoPgRchNsjeYS3'") {
+		t.Fatalf("snapshot SQL should bind resolved ID; got %q", srv.sqls[1])
 	}
 }

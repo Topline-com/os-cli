@@ -1,7 +1,7 @@
 ---
 name: topline-os-cli
 description: Use the Topline OS CLI for SQL-first CRM analytics, pipeline audits, deal briefs, and agent-safe sales operations. Default to the composite `topline --agent query audit|snapshot|freshness` commands for standard analytics; use REST-backed commands for live drilldowns and approved writes. Triggers on Topline OS, CRM pipeline, opportunity, deal, sales activity, and `topline` CLI questions.
-version: 1.6.1
+version: 1.6.2
 ---
 
 # Topline OS CLI Skill
@@ -13,12 +13,13 @@ Use the `topline` CLI for Topline OS CRM workflows. For broad CRM analytics, **p
 For any "what happened in pipeline X over window W" question, run **exactly** this sequence and stop:
 
 1. `topline --agent query doctor` — readiness probe. JSON: `queryTokenPresent`, `schemaReachable`, `tableCount`, `missingTables`, `recommendation`. If `queryTokenPresent` is false, `schemaReachable` is false, or any expected table is missing, stop and report the readiness gap. Missing tables/views are `os-mcp` coverage bugs; surface them in the final answer.
-2. `topline --agent query audit --pipeline PIPELINE_ID --since WINDOW --status open` — one composite call returning `freshness`, `snapshot`, `activity` (with `unique_touches`), `deals`, and `movement`. Default `--since this-week-et` for "this week"; the CLI resolves the window.
+2. `topline --agent query audit --pipeline PIPELINE_ID_OR_NAME --since WINDOW --status open` — one composite call returning `freshness`, `snapshot`, `activity` (with `unique_touches`), `deals`, `movement`, and `pipelineResolution`. `--pipeline` accepts an opaque 20-char ID **or** a fuzzy name (e.g. `'flex triage'`); on unknown/ambiguous names the CLI errors with the list of available pipelines. Default `--since this-week-et` for "this week"; the CLI resolves the window.
 3. Answer.
 
 **Hard ceiling: 3 tool calls after skills load** (doctor + audit + answer). Banned in the default flow:
 
 - Raw `topline --agent query sql --sql ...` for standard pipeline audits — `query audit` already covers the shape.
+- Raw `query sql` to resolve a pipeline name to its opaque ID. `query audit` / `query snapshot` accept names directly (v1.6.2+) and emit `pipelineResolution`.
 - `query schema`, `query explain`, or per-table freshness SQL before `query audit`. The audit payload's `freshness` field is enough.
 - `pipeline audit`, `opportunities search`, `conversations search`, per-conversation message fetches.
 - `python3` / `execute_code` / any subprocess wrapper around `topline`. The CLI returns JSON; parse it directly.
@@ -104,3 +105,4 @@ Prefer `--agent` for token-efficient, PII-masked output. Never print PIT or quer
 - **Treating current pipeline as historical origin.** The `opportunities` warehouse table exposes current pipeline/stage state; a won Qualified opportunity is not proof the deal originated in Triage. For Flex conversion questions, answer current-state first (e.g. current pipeline = `Sales - Flex - Qualified`, status = won, created/closed in window), then add a lineage confidence caveat unless a history/audit table or activity event records the move.
 - **Counting automated workflow touches as rep effort.** For manual outreach audits, exclude workflow/app automation — in the hosted warehouse, `raw_payload.source = 'app'` on `messages` is the automation exclusion signal. Break out calls/email/SMS separately and report contact counts.
 - **Mislabeling SQL/native disagreements as "sync lag".** Only call it lag when `_synced_at` proves lag. Missing UNION branches or coverage gaps are `os-mcp` bugs, not lag — disclose and stop.
+- **Resolving pipeline names to IDs via raw SQL between `query audit` calls.** Pass the name straight to `--pipeline`; the CLI handles the lookup and emits `pipelineResolution` showing `matchedId` / `matchedName`. On 0 or >1 matches the CLI errors with the available pipelines list — don't paper over it with raw SQL.
