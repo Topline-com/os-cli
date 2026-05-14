@@ -496,12 +496,24 @@ func selectIDNamePairs(ctx context.Context, client *topline.QueryClient, sql str
 	rowsAny, _ := raw["rows"].([]any)
 	out := make([]idNamePair, 0, len(rowsAny))
 	for _, r := range rowsAny {
-		row, ok := r.([]any)
-		if !ok || len(row) <= idIdx || len(row) <= nameIdx {
+		var id, name string
+		switch row := r.(type) {
+		case map[string]any:
+			// Hosted warehouse returns rows as column-keyed objects, e.g.
+			// {"id": "...", "name": "..."}. Use column names directly.
+			id, _ = row["id"].(string)
+			name, _ = row["name"].(string)
+		case []any:
+			// Some deployments / tests return rows as positional arrays
+			// aligned with the `columns` order.
+			if len(row) <= idIdx || len(row) <= nameIdx {
+				continue
+			}
+			id, _ = row[idIdx].(string)
+			name, _ = row[nameIdx].(string)
+		default:
 			continue
 		}
-		id, _ := row[idIdx].(string)
-		name, _ := row[nameIdx].(string)
 		id = strings.TrimSpace(id)
 		name = strings.TrimSpace(name)
 		if id == "" {
