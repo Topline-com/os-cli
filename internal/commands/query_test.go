@@ -434,9 +434,13 @@ func (s *pipelineLookupServer) handle(w http.ResponseWriter, r *http.Request) {
 				matches = append(matches, p)
 			}
 		}
+		// The hosted warehouse query API returns rows as column-keyed
+		// objects (e.g. {"id":"...","name":"..."}), not positional arrays.
+		// Mirror that shape here so the resolver is exercised against the
+		// real wire format.
 		rows := make([]string, 0, len(matches))
 		for _, p := range matches {
-			rows = append(rows, fmt.Sprintf(`["%s","%s"]`, p.ID, p.Name))
+			rows = append(rows, fmt.Sprintf(`{"id":%q,"name":%q}`, p.ID, p.Name))
 		}
 		_, _ = fmt.Fprintf(w, `{"columns":["id","name"],"rows":[%s]}`, strings.Join(rows, ","))
 		return
