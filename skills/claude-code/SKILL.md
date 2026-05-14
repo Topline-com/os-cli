@@ -1,3 +1,8 @@
+---
+name: topline-os-cli
+description: Use the Topline OS CLI for SQL-first CRM analytics, pipeline audits, deal briefs, and agent-safe sales operations. Default to the composite `topline --agent query audit|snapshot|freshness` commands for standard analytics; use REST-backed commands for live drilldowns and approved writes. Triggers on Topline OS, CRM pipeline, opportunity, deal, sales activity, and `topline` CLI questions.
+---
+
 # Topline OS CLI Skill
 
 Use the `topline` CLI for Topline OS CRM workflows. For broad CRM analytics, **prefer the composite warehouse commands** (`topline --agent query audit|snapshot|freshness`) when `TOPLINE_QUERY_TOKEN` is configured. They wrap the standard pipeline audit shape into one CLI call. Use REST-backed CLI commands for live operational reads, exact object drilldowns, and approved writes.

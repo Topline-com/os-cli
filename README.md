@@ -18,6 +18,10 @@ A good CLI should answer those with one command, compact JSON, and optional loca
 
 ## Install
 
+> **Using Claude Code?** Follow the focused end-to-end guide:
+> [`docs/install-claude-code.md`](docs/install-claude-code.md) — binary install,
+> env vars, and dropping the skill into `~/.claude/skills/` in one shot.
+
 ```bash
 go install github.com/Topline-com/os-cli/cmd/topline@latest
 ```
