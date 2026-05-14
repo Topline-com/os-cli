@@ -1,6 +1,7 @@
 ---
 name: topline-os-cli
 description: Use the Topline OS CLI for SQL-first CRM analytics, pipeline audits, deal briefs, and agent-safe sales operations. Default to the composite `topline --agent query audit|snapshot|freshness` commands for standard analytics; use REST-backed commands for live drilldowns and approved writes. Triggers on Topline OS, CRM pipeline, opportunity, deal, sales activity, and `topline` CLI questions.
+version: 1.6.1
 ---
 
 # Topline OS CLI Skill
@@ -97,3 +98,9 @@ topline sync init --db topline.db
 ## Output rules
 
 Prefer `--agent` for token-efficient, PII-masked output. Never print PIT or query token values. Avoid markdown tables in chat replies; use bullets. Keep activity separate from movement: conversation activity can happen without opportunity stage/status changes.
+
+## Common pitfalls
+
+- **Treating current pipeline as historical origin.** The `opportunities` warehouse table exposes current pipeline/stage state; a won Qualified opportunity is not proof the deal originated in Triage. For Flex conversion questions, answer current-state first (e.g. current pipeline = `Sales - Flex - Qualified`, status = won, created/closed in window), then add a lineage confidence caveat unless a history/audit table or activity event records the move.
+- **Counting automated workflow touches as rep effort.** For manual outreach audits, exclude workflow/app automation — in the hosted warehouse, `raw_payload.source = 'app'` on `messages` is the automation exclusion signal. Break out calls/email/SMS separately and report contact counts.
+- **Mislabeling SQL/native disagreements as "sync lag".** Only call it lag when `_synced_at` proves lag. Missing UNION branches or coverage gaps are `os-mcp` bugs, not lag — disclose and stop.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -219,11 +220,16 @@ func syncOpportunities(ctx context.Context, client *topline.Client, db *sql.DB, 
 		if err := tx.Commit(); err != nil {
 			return r, err
 		}
-		// Pagination: GHL search endpoints expose startAfter (epoch ms) +
-		// startAfterId via meta.{startAfter,startAfterId} OR nextPageUrl.
+		// Pagination: GHL search endpoints expose startAfter (epoch ms, encoded
+		// as a JSON number) + startAfterId via meta. anyToString handles the
+		// numeric case — stringField alone returns "" for float64 values and
+		// silently drops the cursor, causing infinite same-page replays.
 		meta, _ := raw["meta"].(map[string]any)
 		nextID := stringField(meta, "startAfterId", "start_after_id")
-		nextAfter := stringField(meta, "startAfter", "start_after")
+		nextAfter := anyToString(meta["startAfter"])
+		if nextAfter == "" {
+			nextAfter = anyToString(meta["start_after"])
+		}
 		if nextID == "" || (nextID == startAfterID && nextAfter == startAfter) {
 			break
 		}
@@ -306,11 +312,16 @@ func syncContacts(ctx context.Context, client *topline.Client, db *sql.DB, locat
 		}
 		// Cursor: GHL contacts/search returns meta.startAfter (epoch ms) +
 		// meta.startAfterId on the next page. Feed those back as a
-		// searchAfter array.
+		// searchAfter array. Trust the cursor — not the page length — as the
+		// stop signal; a "short" page can still be followed by a full one when
+		// GHL filters server-side after the fetch.
 		meta, _ := raw["meta"].(map[string]any)
 		nextID := stringField(meta, "startAfterId", "start_after_id")
 		nextAfter := meta["startAfter"]
-		if nextID == "" || len(list) < pageLimit {
+		if nextAfter == nil {
+			nextAfter = meta["start_after"]
+		}
+		if nextID == "" {
 			break
 		}
 		next := []any{nextAfter, nextID}
@@ -394,7 +405,10 @@ func syncConversations(ctx context.Context, client *topline.Client, db *sql.DB, 
 		}
 		meta, _ := raw["meta"].(map[string]any)
 		nextID := stringField(meta, "startAfterId", "start_after_id")
-		nextAfter := stringField(meta, "startAfter", "start_after")
+		nextAfter := anyToString(meta["startAfter"])
+		if nextAfter == "" {
+			nextAfter = anyToString(meta["start_after"])
+		}
 		if nextID == "" || (nextID == startAfterID && nextAfter == startAfter) {
 			break
 		}
@@ -543,6 +557,33 @@ func stringField(m map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// anyToString converts a JSON-decoded value to its string form, handling the
+// numeric case that stringField silently drops. GHL pagination cursors arrive
+// as numbers (epoch ms) inside meta.startAfter — formatting them as a string
+// without scientific notation is required so we can pass them back in the
+// query string for the next page.
+func anyToString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(x)
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case json.Number:
+		return string(x)
+	case bool:
+		return strconv.FormatBool(x)
+	default:
+		return fmt.Sprint(x)
+	}
 }
 
 func floatField(m map[string]any, keys ...string) float64 {
