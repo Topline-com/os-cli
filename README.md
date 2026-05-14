@@ -2,7 +2,12 @@
 
 Agent-native command line interface for Topline OS.
 
-`os-cli` is the Printing Press-style companion to [`Topline-com/os-mcp`](https://github.com/Topline-com/os-mcp): the MCP exposes safe CRM actions to agents; this CLI gives operators and agents fast, composable muscle memory for CRM work.
+`os-cli` is a single static binary that runs **standalone**: one Private
+Integration Token, one location ID, no MCP server install, no second token,
+no second hostname. Analytics commands query a local SQLite mirror of your
+CRM — synced with `topline local sync` and queried with `topline local sql`.
+The legacy hosted `query` family that delegated to `os-mcp` still works for
+back-compat, but it is no longer required for any first-class workflow.
 
 ## Why this exists
 
@@ -141,7 +146,27 @@ hidden tables are rejected) and caps results at 5,000 rows. Use this for
 Streamlined-style analytics questions where a relational scan beats paginated
 REST fan-out.
 
-Local SQLite foundation:
+Native (recommended) — local SQLite mirror, one token, zero MCP:
+
+```bash
+topline local sync                                    # pulls pipelines + opportunities into ~/.topline/state.db
+topline local status                                  # row counts + last sync timestamp
+topline local sql --sql 'SELECT status, COUNT(*) AS n FROM opportunities GROUP BY status'
+topline local pipeline snapshot --pipeline-id PIPE    # open count + value per stage (local)
+topline local pipeline stale --days 14                # open opportunities untouched 14d+ (local)
+```
+
+The `local` family uses only `TOPLINE_PIT` + `TOPLINE_LOCATION_ID`. No
+`TOPLINE_QUERY_TOKEN`, no hosted MCP, no separate connect flow. The mirror
+is a plain SQLite file at `~/.topline/state.db` (override with `--db PATH`
+or `TOPLINE_DB`). Schema lives in `internal/sync/schema.go` and ships with
+the binary.
+
+This is the path under active development — compound commands
+(`bottleneck`, `orphans`, `unanswered`, `health`, `deal brief`) land on top
+of the local mirror in subsequent phases.
+
+Legacy SQLite scaffolding (kept for back-compat):
 
 ```bash
 topline sync init --db topline.db
@@ -185,13 +210,14 @@ Parity command scaffolding exists for the public MCP action surface:
 
 Agent-native foundations included now:
 
+- `local sync` — REST → local SQLite mirror (pipelines, opportunities); idempotent, paginated
+- `local sql` — read-only SQL against the local mirror
+- `local pipeline snapshot` — open count + value per stage, locally computed
+- `local pipeline stale --days N` — open opportunities untouched N days, locally computed
+- `local status` — row counts + last sync timestamp
 - `pipeline audit` with recent conversation scan + parallel message/task joins
-- `query schema|catalog|explain|sql` against the hosted MCP warehouse HTTP API
-- `sync init`
-- `--agent`
-- `--mask-pii`
-- compact JSON output
-- SQLite schema for CRM mirror tables
+- `query schema|catalog|explain|sql` — back-compat hosted MCP warehouse surface
+- `--agent`, `--mask-pii`, compact JSON output
 
 ## Design direction
 

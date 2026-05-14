@@ -47,6 +47,9 @@ func Execute(args []string, stdout, stderr io.Writer) error {
 	if len(rest) >= 1 && rest[0] == "query" {
 		return runQueryCommand(rest[1:], stdout, globals)
 	}
+	if len(rest) >= 1 && rest[0] == "local" {
+		return runLocalCommand(rest[1:], stdout, globals)
+	}
 	if len(rest) >= 2 && rest[0] == "sync" && rest[1] == "init" {
 		flags, err := parseFlags(rest[2:])
 		if err != nil {
@@ -238,6 +241,8 @@ func printHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "\nAgent-native commands:")
 	_, _ = fmt.Fprintln(w, "  pipeline audit --pipeline-id PIPE --since YYYY-MM-DD|this-week-et [--concurrency 8] [--skip-activity]")
 	_, _ = fmt.Fprintln(w, "  query schema | catalog | explain --tables a,b | sql --sql SELECT...")
+	_, _ = fmt.Fprintln(w, "  local sync                                 # one-token native sync into ~/.topline/state.db")
+	_, _ = fmt.Fprintln(w, "  local status | sql --sql ... | pipeline snapshot | pipeline stale --days 14")
 	_, _ = fmt.Fprintln(w, "  sync init --db topline.db")
 	_, _ = fmt.Fprintln(w, "\nParity commands:")
 	for _, cmd := range commands {
